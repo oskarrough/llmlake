@@ -4,7 +4,7 @@
 import { basename } from 'node:path'
 import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
-export const AGENTS = ['claude', 'pi', 'codex'] as const
+export const AGENTS = ['claude', 'pi', 'codex', 'hermes'] as const
 export type Agent = (typeof AGENTS)[number]
 
 // DuckDB column types for read_json. Keep in sync with the Row type.
@@ -508,10 +508,104 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
   return row
 }
 
+function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
+  const { state } = ctx
+  const ev = JSON.parse(line)
+
+  // session_meta — extract provider and model, skip row
+  if (ev.role === 'session_meta') {
+    if (ev.model) state.model = ev.model
+    if (ev.platform) state.provider = ev.platform
+    return []
+  }
+
+  // Derive session_id from filename (YYYYMMDD_HHMMSS_<hash>.jsonl)
+  if (state.session_id == null) {
+    const m = basename(ctx.sourceFile).match(/^(\d{8}_\d{6})_([0-9a-f]+)\.jsonl/)
+    state.session_id = m?.[2] ?? null
+  }
+
+  // --- assistant lines: can carry tool_calls[] alongside content/reasoning ---
+  if (ev.role === 'assistant') {
+    const toolCalls = ev.tool_calls ?? []
+    const callRows: Row[] = []
+
+    for (const tc of toolCalls) {
+      const fn = tc.function ?? {}
+      const cr: Row = baseRow(ev, lineNo, ctx)
+      cr.ts = ev.timestamp ?? null
+      cr.session_id = state.session_id
+      cr.event_id = tc.id ?? tc.call_id ?? null
+      cr.event_type = 'tool_call'
+      cr.role = 'assistant'
+      cr.model = state.model
+      cr.provider = state.provider
+      cr.cwd = state.cwd
+      cr.tool_name = fn.name ?? null
+      cr.tool_call_id = tc.id ?? tc.call_id ?? null
+      cr.tool_input = maybeJson(fn.arguments ?? null)
+      callRows.push(cr)
+    }
+
+    // Parent row only if there's content, reasoning, or no tool calls
+    const content = typeof ev.content === 'string' ? ev.content : null
+    const thinking = typeof ev.reasoning === 'string' ? ev.reasoning : null
+    const hasContent = !!(content || thinking)
+
+    if (hasContent) {
+      const parent: Row = baseRow(ev, lineNo, ctx)
+      parent.ts = ev.timestamp ?? null
+      parent.session_id = state.session_id
+      parent.event_type = thinking ? 'reasoning' : 'assistant_message'
+      parent.role = 'assistant'
+      parent.model = state.model
+      parent.provider = state.provider
+      parent.cwd = state.cwd
+      parent.text = thinking || content
+      parent.stop_reason = ev.finish_reason ?? null
+      return callRows.length ? [parent, ...callRows] : [parent]
+    }
+    return callRows.length ? callRows : []
+  }
+
+  // --- tool result lines ---
+  if (ev.role === 'tool') {
+    const row: Row = baseRow(ev, lineNo, ctx)
+    row.ts = ev.timestamp ?? null
+    row.session_id = state.session_id
+    row.event_id = ev.tool_call_id ?? null
+    row.event_type = 'tool_result'
+    row.role = 'tool'
+    row.model = state.model
+    row.provider = state.provider
+    row.cwd = state.cwd
+    row.tool_name = ev.name ?? null
+    row.tool_call_id = ev.tool_call_id ?? null
+    row.tool_output = maybeJson(ev.content)
+    // Hermes doesn't ship is_error on tool lines; absent = success
+    row.is_error = false
+    return [row]
+  }
+
+  // --- user lines ---
+  const content = typeof ev.content === 'string' ? ev.content : null
+  const row = baseRow(ev, lineNo, ctx)
+  row.ts = ev.timestamp ?? null
+  row.session_id = state.session_id
+  row.event_type = 'user_message'
+  row.role = 'user'
+  row.model = state.model
+  row.provider = state.provider
+  row.cwd = state.cwd
+  row.text = content ?? null
+  return [row]
+}
+
 const PARSERS: Record<Agent, (l: string, n: number, c: ParseContext) => Row | Row[]> = {
   claude: parseClaude,
   pi: parsePi,
   codex: parseCodex,
+  hermes: parseHermes,
 }
 
 export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row[] {

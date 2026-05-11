@@ -2,10 +2,7 @@
   "name": "llmlake",
   "private": true,
   "scripts": {
-    "check": "vp check --fix",
-    "collect": "bun run collect.ts",
-    "build": "bun run build.ts",
-    "query": "./query"
+    "check": "vp check --fix"
   },
   "devDependencies": {
     "@types/bun": "latest",

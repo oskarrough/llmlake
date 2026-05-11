@@ -3,5 +3,5 @@
 import { $ } from 'bun'
 import { join } from 'node:path'
 
-const scripts = ['collect-claude.ts', 'collect-pi.ts', 'collect-codex.ts']
+const scripts = ['collect-claude.ts', 'collect-pi.ts', 'collect-codex.ts', 'collect-hermes.ts']
 await Promise.all(scripts.map((s) => $`bun run ${join(import.meta.dir, s)}`))
