@@ -1,89 +1,102 @@
-// Parse one JSONL line from a raw agent session (claude, pi, codex) into a
-// normalized Row in the llmlake schema. The driver supplies a ParseContext
-// (agent, source file path, mutable state carried across lines).
+// Parse one JSONL line from a raw agent session (claude, pi, codex, hermes)
+// into a normalized Row in the llmlake schema. The driver supplies a
+// ParseContext (agent, source file path, mutable state carried across lines).
 import { basename } from 'node:path'
+import { Option, Schema, SchemaAST } from 'effect'
 import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
+// Single source of truth for both the TypeScript `Row` type and the DuckDB
+// column-type map fed to read_json. Each field carries a duckdb annotation so
+// `COLUMNS` / `colsSql` are derived from the schema instead of maintained as
+// a parallel const.
+
+const DuckdbTypeId = Symbol.for('llmlake/DuckdbType')
+
+const duckdb =
+  (type: string) =>
+  <S extends Schema.Schema.Any>(schema: S): S =>
+    schema.annotations({ [DuckdbTypeId]: type }) as S
+
+const STR = Schema.NullOr(Schema.String).pipe(duckdb('VARCHAR'))
+const INT = Schema.NullOr(Schema.Number).pipe(duckdb('BIGINT'))
+const DBL = Schema.NullOr(Schema.Number).pipe(duckdb('DOUBLE'))
+const BOOL = Schema.NullOr(Schema.Boolean).pipe(duckdb('BOOLEAN'))
+const JSON_ = Schema.Unknown.pipe(duckdb('JSON'))
+
 export const AGENTS = ['claude', 'pi', 'codex', 'hermes'] as const
+const AgentSchema = Schema.Literal(...AGENTS).pipe(duckdb('VARCHAR'))
 export type Agent = (typeof AGENTS)[number]
 
-// DuckDB column types for read_json. Keep in sync with the Row type.
-export const COLUMNS = {
-  row_id: 'VARCHAR',
-  ts: 'TIMESTAMPTZ',
-  agent: 'VARCHAR',
-  session_id: 'VARCHAR',
-  parent_session_id: 'VARCHAR',
-  event_id: 'VARCHAR',
-  parent_id: 'VARCHAR',
-  event_type: 'VARCHAR',
-  role: 'VARCHAR',
-  model: 'VARCHAR',
-  provider: 'VARCHAR',
-  input_tokens: 'BIGINT',
-  output_tokens: 'BIGINT',
-  cache_read_tokens: 'BIGINT',
-  cache_write_tokens: 'BIGINT',
-  cost_usd: 'DOUBLE',
-  text: 'VARCHAR',
-  tool_name: 'VARCHAR',
-  tool_call_id: 'VARCHAR',
-  tool_input: 'JSON',
-  tool_output: 'JSON',
-  is_error: 'BOOLEAN',
-  stop_reason: 'VARCHAR',
-  cwd: 'VARCHAR',
-  is_subagent: 'BOOLEAN',
-  source_file: 'VARCHAR',
-  source_line: 'BIGINT',
-  raw: 'JSON',
-} as const
+const EVENT_TYPES = [
+  'user_message',
+  'assistant_message',
+  'tool_call',
+  'tool_result',
+  'reasoning',
+  'session_meta',
+  'usage',
+  'compacted',
+  'other',
+] as const
+const EventTypeSchema = Schema.Literal(...EVENT_TYPES).pipe(duckdb('VARCHAR'))
+export type EventType = (typeof EVENT_TYPES)[number]
+
+export const RowSchema = Schema.Struct({
+  row_id: Schema.String.pipe(duckdb('VARCHAR')),
+  ts: Schema.NullOr(Schema.String).pipe(duckdb('TIMESTAMPTZ')),
+  agent: AgentSchema,
+  session_id: STR,
+  parent_session_id: STR,
+  event_id: STR,
+  parent_id: STR,
+  event_type: EventTypeSchema,
+  role: STR,
+  model: STR,
+  provider: STR,
+  input_tokens: INT,
+  output_tokens: INT,
+  cache_read_tokens: INT,
+  cache_write_tokens: INT,
+  cost_usd: DBL,
+  text: STR,
+  tool_name: STR,
+  tool_call_id: STR,
+  tool_input: JSON_,
+  tool_output: JSON_,
+  is_error: BOOL,
+  stop_reason: STR,
+  cwd: STR,
+  is_subagent: Schema.Boolean.pipe(duckdb('BOOLEAN')),
+  source_file: Schema.String.pipe(duckdb('VARCHAR')),
+  source_line: Schema.Number.pipe(duckdb('BIGINT')),
+  raw: JSON_,
+})
+
+// Schema.Struct fields are readonly in the inferred type, but the parsers
+// build a row by mutating fields after `baseRow`. Strip readonly here so the
+// working type lines up with the imperative parser style.
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+export type Row = Mutable<Schema.Schema.Type<typeof RowSchema>>
+
+// Walk the schema once at module load to extract column types — fails fast if
+// a field is missing its duckdb annotation, so the parquet writer is never fed
+// a row whose column type is unknown to DuckDB.
+const rowAst = RowSchema.ast
+if (rowAst._tag !== 'TypeLiteral') throw new Error('RowSchema must be a TypeLiteral')
+const getDuckdbType = SchemaAST.getAnnotation<string>(DuckdbTypeId)
+export const COLUMNS: Readonly<Record<string, string>> = Object.fromEntries(
+  rowAst.propertySignatures.map((ps) => {
+    const ann = getDuckdbType(ps.type)
+    if (Option.isNone(ann)) {
+      throw new Error(`row schema field '${String(ps.name)}' missing duckdb annotation`)
+    }
+    return [String(ps.name), ann.value]
+  }),
+)
 
 export const colsSql = Object.entries(COLUMNS)
   .map(([k, v]) => `${k}: '${v}'`)
   .join(', ')
-
-export type EventType =
-  | 'user_message'
-  | 'assistant_message'
-  | 'tool_call'
-  | 'tool_result'
-  | 'reasoning'
-  | 'session_meta'
-  | 'usage'
-  | 'compacted'
-  | 'other'
-
-export type Row = {
-  row_id: string
-  ts: string | null
-  agent: Agent
-  session_id: string | null
-  parent_session_id: string | null
-  event_id: string | null
-  parent_id: string | null
-  event_type: EventType
-  role: string | null
-  model: string | null
-  provider: string | null
-  input_tokens: number | null
-  output_tokens: number | null
-  cache_read_tokens: number | null
-  cache_write_tokens: number | null
-  cost_usd: number | null
-  text: string | null
-  tool_name: string | null
-  tool_call_id: string | null
-  tool_input: unknown
-  tool_output: unknown
-  is_error: boolean | null
-  stop_reason: string | null
-  cwd: string | null
-  is_subagent: boolean
-  source_file: string
-  source_line: number
-  raw: unknown
-}
 
 export type ParseState = {
   session_id: string | null

@@ -21,10 +21,13 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
 
     // Some stricter flags (disabled by default)
-    "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "noPropertyAccessFromIndexSignature": false,
+
+    "plugins": [{ "name": "@effect/language-service" }]
   }
 }

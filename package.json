@@ -1,11 +1,18 @@
 {
   "name": "llmlake",
-  "devDependencies": {
-    "@types/bun": "latest",
-    "vite-plus": "^0.1.20"
-  },
+  "private": true,
   "scripts": {
-    "check": "vp check --fix"
+    "check": "oxfmt --write && oxlint --fix",
+    "typecheck": "oxlint --type-aware --type-check"
   },
-  "private": true
+  "dependencies": {
+    "effect": "^3.21.2"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.85.1",
+    "@types/bun": "latest",
+    "oxfmt": "^0.48.0",
+    "oxlint": "^1.63.0",
+    "oxlint-tsgolint": "^0.22.1"
+  }
 }

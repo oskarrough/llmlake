@@ -61,7 +61,7 @@ class DuckdbWorker {
   async copy(rows: Row[], out: string): Promise<void> {
     await Bun.write(this.tmpJson, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     const marker = `__llmlake_done_${++this.seq}__`
-    this.proc.stdin.write(
+    await this.proc.stdin.write(
       `COPY (SELECT * FROM read_json('${this.tmpJson}', format='newline_delimited', columns={${colsSql}})) ` +
         `TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
     )
@@ -75,7 +75,7 @@ class DuckdbWorker {
   }
 
   async close(): Promise<void> {
-    this.proc.stdin.end()
+    await this.proc.stdin.end()
     await this.proc.exited
     await unlink(this.tmpJson).catch(() => {})
   }
