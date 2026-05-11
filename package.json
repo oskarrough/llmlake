@@ -1,11 +1,11 @@
 {
   "name": "llmlake",
-  "private": true,
-  "scripts": {
-    "check": "vp check --fix"
-  },
   "devDependencies": {
     "@types/bun": "latest",
     "vite-plus": "^0.1.20"
-  }
+  },
+  "scripts": {
+    "check": "vp check --fix"
+  },
+  "private": true
 }

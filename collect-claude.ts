@@ -15,11 +15,17 @@
 //                    cache_read_input_tokens, cache_creation_input_tokens }
 //   toolUseResult  present on tool_result events
 import { $ } from 'bun'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const src = join(homedir(), '.claude/projects/')
 const dst = join(import.meta.dir, 'data/sessions/claude/')
+
+if (!existsSync(src)) {
+	console.warn(`skipped claude: ${src} does not exist`)
+	process.exit(0)
+}
 
 await $`mkdir -p ${dst}`
 await $`rsync -a --include='*/' --include='*.jsonl' --exclude='*' ${src} ${dst}`

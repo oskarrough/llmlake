@@ -18,11 +18,17 @@
 //   - role=developer should normalize to "system".
 //   - token usage is its own event_msg (token_count), not attached to messages.
 import { $ } from 'bun'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const src = join(homedir(), '.codex/sessions/')
 const dst = join(import.meta.dir, 'data/sessions/codex/')
+
+if (!existsSync(src)) {
+	console.warn(`skipped codex: ${src} does not exist`)
+	process.exit(0)
+}
 
 await $`mkdir -p ${dst}`
 await $`rsync -a --include='*/' --include='*.jsonl' --exclude='*' ${src} ${dst}`
