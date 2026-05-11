@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
+
 // llmlake-effect.ts — Effect.ts port of `collect` + `build` in one file.
 // Run: bun llmlake-effect.ts <collect|build>
-//
 // Parses, errors, and concurrency are expressed with Effect so we can
 // feel out whether it's a nicer fit for a local data pipeline than the
 // plain Bun scripts in collect.ts / build.ts.
@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, stat, unlink } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
-import { Cause, Console, Context, Data, Effect, Layer, Pool, Schema } from 'effect'
+import { Cause, Console, Data, Effect, Pool, Schema } from 'effect'
 import {
   AGENTS,
   colsSql,
@@ -23,17 +23,11 @@ import {
   type Row,
 } from './parse-session.ts'
 
-// Validate every parser output against RowSchema before it reaches the
-// parquet writer. Catches silent parser bugs (wrong type for a field, missing
-// required column, etc.) at the point they're cheapest to debug.
 const validateRow = Schema.validateSync(RowSchema)
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 // Only one tagged error here — the rest go through the one-arg `tryPromise`
-// form as `UnknownException`, since `buildOne` handles them uniformly. The
-// `RsyncFailed` tag earns its keep because `collectOne` catches it per-source
-// so one bad source doesn't cancel the others.
-
+// form as `UnknownException`, since `buildOne` handles them uniformly. 
 class RsyncFailed extends Data.TaggedError('RsyncFailed')<{
   readonly agent: Agent
   readonly src: string
@@ -44,17 +38,12 @@ class BuildHadErrors extends Data.TaggedError('BuildHadErrors')<{
   readonly count: number
 }> {}
 
-// ─── Paths service ───────────────────────────────────────────────────────────
+// ─── Paths ───────────────────────────────────────────────────────────────────
 
-class Paths extends Context.Tag('Paths')<
-  Paths,
-  { readonly sessionsRoot: string; readonly parquetRoot: string }
->() {}
-
-const PathsLive = Layer.succeed(Paths, {
+const PATHS = {
   sessionsRoot: join(import.meta.dir, 'data/sessions'),
   parquetRoot: join(import.meta.dir, 'data/parquet'),
-})
+}
 
 // ─── Collect ─────────────────────────────────────────────────────────────────
 
@@ -67,8 +56,7 @@ const SOURCES: ReadonlyArray<{ readonly agent: Agent; readonly src: string }> = 
 
 const collectOne = (s: { agent: Agent; src: string }) =>
   Effect.gen(function* () {
-    const paths = yield* Paths
-    const dst = join(paths.sessionsRoot, `${s.agent}/`)
+    const dst = join(PATHS.sessionsRoot, `${s.agent}/`)
     if (!existsSync(s.src)) {
       yield* Console.warn(`skipped ${s.agent}: ${s.src} does not exist`)
       return { agent: s.agent, status: 'skipped' as const }
@@ -144,7 +132,7 @@ const acquireWorker = Effect.acquireRelease(
 
 const tryStatMtime = (path: string) =>
   Effect.tryPromise(() => stat(path).then((s) => s.mtimeMs)).pipe(
-    Effect.catchAll(() => Effect.succeed(null as number | null)),
+    Effect.orElseSucceed<number | null>(() => null),
   )
 
 const listJsonl = (root: string) =>
@@ -156,11 +144,11 @@ const listJsonl = (root: string) =>
     return files
   })
 
-const parseFile = (src: string, agent: Agent, sessionsRoot: string) =>
+const parseFile = (src: string, agent: Agent) =>
   Effect.tryPromise(async () => {
     const ctx: ParseContext = {
       agent,
-      sourceFile: relative(sessionsRoot, src),
+      sourceFile: relative(PATHS.sessionsRoot, src),
       state: newState(),
     }
     const rows: Row[] = []
@@ -184,29 +172,28 @@ const parseFile = (src: string, agent: Agent, sessionsRoot: string) =>
     return rows
   })
 
-const outPathFor = (parquetRoot: string, sessionsRoot: string, agent: Agent, src: string) => {
-  const rel = relative(join(sessionsRoot, agent), src).replace(/\.jsonl$/, '.parquet')
-  return join(parquetRoot, `agent=${agent}`, rel)
+const outPathFor = (agent: Agent, src: string) => {
+  const rel = relative(join(PATHS.sessionsRoot, agent), src).replace(/\.jsonl$/, '.parquet')
+  return join(PATHS.parquetRoot, `agent=${agent}`, rel)
 }
 
 type Outcome = 'built' | 'skipped' | 'error'
 
 const buildOne = (src: string, pool: Pool.Pool<DuckdbWorker, Cause.UnknownException>) =>
   Effect.gen(function* () {
-    const paths = yield* Paths
-    const rel = relative(paths.sessionsRoot, src)
+    const rel = relative(PATHS.sessionsRoot, src)
     const agent = rel.split(/[\\/]/)[0] as Agent
     if (!AGENTS.includes(agent)) {
       yield* Console.warn(`unknown agent for ${rel}`)
       return 'error' as Outcome
     }
-    const out = outPathFor(paths.parquetRoot, paths.sessionsRoot, agent, src)
+    const out = outPathFor(agent, src)
     const [srcM, outM] = yield* Effect.all([tryStatMtime(src), tryStatMtime(out)], {
       concurrency: 'unbounded',
     })
     if (srcM != null && outM != null && outM >= srcM) return 'skipped' as Outcome
 
-    const rows = yield* parseFile(src, agent, paths.sessionsRoot)
+    const rows = yield* parseFile(src, agent)
     yield* Effect.tryPromise(() => mkdir(dirname(out), { recursive: true }))
 
     yield* Effect.scoped(
@@ -226,11 +213,10 @@ const buildOne = (src: string, pool: Pool.Pool<DuckdbWorker, Cause.UnknownExcept
   )
 
 const build = Effect.gen(function* () {
-  const paths = yield* Paths
-  const files = yield* listJsonl(paths.sessionsRoot)
-  const envC = process.env.BUILD_CONCURRENCY ? Number(process.env.BUILD_CONCURRENCY) : null
+  const files = yield* listJsonl(PATHS.sessionsRoot)
+  const envC = Number(process.env.BUILD_CONCURRENCY) || 0
   const concurrency =
-    envC && envC > 0 ? envC : Math.max(2, Math.min(16, navigator.hardwareConcurrency ?? 4))
+    envC > 0 ? envC : Math.max(2, Math.min(16, navigator.hardwareConcurrency ?? 4))
 
   const outcomes = yield* Effect.scoped(
     Effect.gen(function* () {
@@ -239,21 +225,14 @@ const build = Effect.gen(function* () {
     }),
   )
 
-  let built = 0
-  let skipped = 0
-  let errors = 0
-  for (const o of outcomes) {
-    if (o === 'built') built++
-    else if (o === 'skipped') skipped++
-    else errors++
-  }
+  const counts: Record<Outcome, number> = { built: 0, skipped: 0, error: 0 }
+  for (const o of outcomes) counts[o]++
   yield* Console.log(
-    `built ${built}, skipped ${skipped}${errors ? `, errors ${errors}` : ''} (of ${files.length})`,
+    `built ${counts.built}, skipped ${counts.skipped}` +
+      `${counts.error ? `, errors ${counts.error}` : ''} (of ${files.length})`,
   )
-  if (errors) return yield* new BuildHadErrors({ count: errors })
+  if (counts.error) return yield* new BuildHadErrors({ count: counts.error })
 })
-
-// ─── Entry ───────────────────────────────────────────────────────────────────
 
 const cmd = process.argv[2]
 if (cmd !== 'collect' && cmd !== 'build') {
@@ -263,7 +242,7 @@ if (cmd !== 'collect' && cmd !== 'build') {
 
 const program = cmd === 'collect' ? collect.pipe(Effect.asVoid) : build
 
-Effect.runPromise(program.pipe(Effect.provide(PathsLive))).catch((e) => {
+Effect.runPromise(program).catch((e) => {
   if (e?._tag !== 'BuildHadErrors') console.error(e)
   process.exit(1)
 })
