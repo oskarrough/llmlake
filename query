@@ -10,7 +10,7 @@ if [[ "${1:-}" == "-c" ]]; then
   shift
   duckdb "$DB" -c "$INIT $*"
 elif [[ $# -gt 0 ]]; then
-  duckdb "$DB" -cmd "$INIT" < "$1"
+  duckdb "$DB" -cmd "$INIT" -cmd ".mode markdown" < "$1"
 else
-  duckdb "$DB" -cmd "$INIT" -cmd ".tables" -cmd "SELECT agent, count(*) AS rows, count(DISTINCT session_id) AS sessions FROM events GROUP BY 1 ORDER BY 1;"
+  duckdb "$DB" -cmd "$INIT" -cmd ".mode markdown" -cmd "SELECT column_name, column_type FROM (DESCRIBE events);" -cmd "SELECT agent, count(DISTINCT session_id) AS sessions, count(*) AS rows FROM events GROUP BY 1 ORDER BY 1;"
 fi

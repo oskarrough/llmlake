@@ -29,6 +29,7 @@ export const COLUMNS = {
   tool_call_id: 'VARCHAR',
   tool_input: 'JSON',
   tool_output: 'JSON',
+  is_error: 'BOOLEAN',
   stop_reason: 'VARCHAR',
   cwd: 'VARCHAR',
   is_subagent: 'BOOLEAN',
@@ -73,6 +74,7 @@ export type Row = {
   tool_call_id: string | null
   tool_input: unknown
   tool_output: unknown
+  is_error: boolean | null
   stop_reason: string | null
   cwd: string | null
   is_subagent: boolean
@@ -160,6 +162,7 @@ function baseRow(ev: unknown, lineNo: number, ctx: ParseContext): Row {
     tool_call_id: null,
     tool_input: null,
     tool_output: null,
+    is_error: null,
     stop_reason: null,
     cwd: ctx.state.cwd,
     is_subagent: ctx.state.is_subagent,
@@ -249,6 +252,8 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
       } else if (block?.type === 'tool_result') {
         row.tool_call_id ??= block.tool_use_id ?? null
         row.tool_output ??= maybeJson(block.content)
+        // Claude omits is_error on success; absent = false.
+        row.is_error = block.is_error === true
         row.event_type = 'tool_result'
       }
     }
@@ -258,6 +263,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   if (row.tool_output == null && ev.toolUseResult != null) {
     row.tool_output = maybeJson(ev.toolUseResult)
     row.event_type = 'tool_result'
+    if (row.is_error == null) row.is_error = false
   }
 
   // Pure tool-call turns become tool_call; turns with text keep assistant_message/reasoning
@@ -346,6 +352,7 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
     row.tool_call_id = msg.toolCallId ?? row.tool_call_id
     row.tool_name = msg.toolName ?? row.tool_name
     row.tool_output = maybeJson(content)
+    if (typeof msg.isError === 'boolean') row.is_error = msg.isError
     row.event_type = 'tool_result'
   }
 
@@ -465,6 +472,22 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
       row.event_type = 'tool_result'
       row.tool_call_id = p.call_id ?? null
       row.tool_output = maybeJson(p.output)
+      // Codex error signals:
+      //  - function_call_output: free-text "Process exited with code N"
+      //  - custom_tool_call_output: JSON-wrapped success {output, metadata:{exit_code}};
+      //    failures come through as a plain non-JSON string ("apply_patch verification failed: ...").
+      if (p.type === 'function_call_output' && typeof p.output === 'string') {
+        const m = p.output.match(/Process exited with code (\d+)/)
+        if (m) row.is_error = m[1] !== '0'
+      } else if (p.type === 'custom_tool_call_output') {
+        if (row.tool_output && typeof row.tool_output === 'object') {
+          const code = (row.tool_output as { metadata?: { exit_code?: unknown } }).metadata
+            ?.exit_code
+          row.is_error = typeof code === 'number' ? code !== 0 : false
+        } else {
+          row.is_error = true
+        }
+      }
     } else if (p.type === 'reasoning') {
       row.event_type = 'reasoning'
       const texts: string[] = []

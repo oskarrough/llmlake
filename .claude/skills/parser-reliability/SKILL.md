@@ -1,5 +1,5 @@
 ---
-name: parser-reliability
+name: llmlake:parser-reliability
 description: Use when editing parse-session.ts, adding an agent parser, or when query numbers look off. Guards against silent parser bugs that quietly distort every downstream query.
 ---
 
@@ -21,7 +21,7 @@ description: Use when editing parse-session.ts, adding an agent parser, or when 
 ## Workflow
 
 1. Edit parser.
-2. Rebuild the affected agent: `rm -rf data/parquet/agent=<agent> && bun run build-all.ts`
+2. Rebuild the affected agent: `rm -rf data/parquet/agent=<agent> && bun run build.ts`
 3. `./query queries/parser-sanity.sql` — expect 0 rows.
 4. Diff event_type counts vs. before. Surprise drops = lost rows.
 5. Spot-check one session: `jq` the raw, compare to `queries/session-detail.sql`.

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+cd "$(dirname "$0")"
+[[ "$1" == "query" ]] && exec ./query "${@:2}"
+exec bun run "$1.ts" "${@:2}"

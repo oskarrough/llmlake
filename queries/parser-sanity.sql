@@ -171,6 +171,35 @@ WITH checks AS (
 
   UNION ALL
 
+  -- INVARIANT: every agent produces some is_error=true rows. A 0 here means
+  -- the parser is silently dropping the agent's native error signal
+  -- (claude block.is_error, pi message.isError, codex exit-code in output).
+  SELECT 'all: agent has zero is_error=true tool_results',
+         agent,
+         1,
+         CAST(NULL AS VARCHAR),
+         'Parser is not extracting the agent''s error flag. Check the tool_result branch in parse-session.ts.'
+  FROM events
+  WHERE event_type='tool_result'
+  GROUP BY agent
+  HAVING count(*) FILTER (WHERE is_error IS TRUE) = 0
+
+  UNION ALL
+
+  -- INVARIANT: is_error should be non-null on tool_results for agents whose
+  -- format always carries the flag (claude block.is_error, pi message.isError).
+  -- Codex is exempt: its exit code is only present for exec-style tools.
+  SELECT 'all: tool_result with NULL is_error (claude/pi)',
+         agent,
+         count(*),
+         any_value(source_file || ':' || source_line),
+         'claude block.is_error and pi message.isError are always present in raw. NULL means the parser missed it.'
+  FROM events
+  WHERE event_type='tool_result' AND agent IN ('claude','pi') AND is_error IS NULL
+  GROUP BY agent
+
+  UNION ALL
+
   -- generic: events with no session_id at all (state machine failure)
   SELECT 'all: events with no session_id',
          agent,

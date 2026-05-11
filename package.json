@@ -3,8 +3,8 @@
   "private": true,
   "scripts": {
     "check": "vp check --fix",
-    "collect-all": "bun run collect-all.ts",
-    "build-all": "bun run build-all.ts",
+    "collect": "bun run collect.ts",
+    "build": "bun run build.ts",
     "query": "./query"
   },
   "devDependencies": {
