@@ -13,6 +13,7 @@ export const COLUMNS = {
   ts: 'TIMESTAMPTZ',
   agent: 'VARCHAR',
   session_id: 'VARCHAR',
+  parent_session_id: 'VARCHAR',
   event_id: 'VARCHAR',
   parent_id: 'VARCHAR',
   event_type: 'VARCHAR',
@@ -58,6 +59,7 @@ export type Row = {
   ts: string | null
   agent: Agent
   session_id: string | null
+  parent_session_id: string | null
   event_id: string | null
   parent_id: string | null
   event_type: EventType
@@ -85,10 +87,16 @@ export type Row = {
 
 export type ParseState = {
   session_id: string | null
+  parent_session_id: string | null
   cwd: string | null
   model: string | null
   provider: string | null
   is_subagent: boolean
+  // Claude subagents live in `<parent>/subagents/agent-*.jsonl` but their
+  // events carry the *parent's* sessionId. We mint a synthetic per-jsonl
+  // session_id so each subagent run is its own "session" in analytics.
+  // Set to the `agent-<suffix>` token on first row of a subagent file.
+  subagent_suffix: string | null
   seenEventIds: Set<string>
 }
 
@@ -101,10 +109,12 @@ export type ParseContext = {
 export function newState(): ParseState {
   return {
     session_id: null,
+    parent_session_id: null,
     cwd: null,
     model: null,
     provider: null,
     is_subagent: false,
+    subagent_suffix: null,
     seenEventIds: new Set(),
   }
 }
@@ -146,6 +156,7 @@ function baseRow(ev: unknown, lineNo: number, ctx: ParseContext): Row {
     ts: null,
     agent: ctx.agent,
     session_id: ctx.state.session_id,
+    parent_session_id: ctx.state.parent_session_id,
     event_id: null,
     parent_id: null,
     event_type: 'other',
@@ -188,7 +199,13 @@ const CLAUDE_META_TYPES = new Set([
 
 function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row[] {
   const { state } = ctx
-  const ev = JSON.parse(line)
+  let ev: any
+  try {
+    ev = JSON.parse(line)
+  } catch {
+    console.warn(`malformed line ${lineNo} in ${ctx.sourceFile}`)
+    return []
+  }
   const msg = ev.message ?? {}
   const usage = msg.usage ?? {}
   const content = msg.content
@@ -201,22 +218,41 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     state.seenEventIds.add(ev.uuid)
   }
 
-  // Fallback: pull session_id from filename when the first event is housekeeping
-  // (file-history-snapshot, permission-mode, etc.) and has no sessionId field.
-  if (state.session_id == null) {
-    const m = basename(ctx.sourceFile).match(
-      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/,
-    )
-    state.session_id = m?.[1] ?? null
+  // Detect subagent files once per session: `<parent>/subagents/agent-*.jsonl`.
+  // We mint a synthetic session_id `<parent>:<agent-suffix>` so each subagent
+  // run is its own session in analytics, and keep the real parent sessionId
+  // in parent_session_id for rollups.
+  if (state.subagent_suffix == null) {
+    state.subagent_suffix =
+      ctx.sourceFile.match(/\/subagents\/(agent-[^/]+?)\.jsonl$/)?.[1] ?? null
   }
 
-  if (ev.sessionId) state.session_id = ev.sessionId
+  const rawSessionId =
+    ev.sessionId ??
+    state.parent_session_id ??
+    (state.subagent_suffix ? null : state.session_id) ??
+    basename(ctx.sourceFile).match(
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/,
+    )?.[1] ??
+    null
+
+  if (state.subagent_suffix) {
+    state.parent_session_id = rawSessionId
+    state.session_id = rawSessionId
+      ? `${rawSessionId}:${state.subagent_suffix}`
+      : state.subagent_suffix
+  } else {
+    state.session_id = rawSessionId
+    state.parent_session_id = null
+  }
+
   if (ev.cwd) state.cwd = ev.cwd
   if (msg.model) state.model = msg.model
 
   const row = baseRow(ev, lineNo, ctx)
   row.ts = ev.timestamp ?? null
-  row.session_id = ev.sessionId ?? state.session_id
+  row.session_id = state.session_id
+  row.parent_session_id = state.parent_session_id
   row.event_id = ev.uuid ?? null
   row.parent_id = ev.parentUuid ?? null
   row.role = normalizeRole(msg.role)
@@ -432,6 +468,7 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
     if (p.source?.subagent != null || p.forked_from_id != null) {
       state.is_subagent = true
     }
+    if (p.forked_from_id) state.parent_session_id = p.forked_from_id
   } else if (ev.type === 'turn_context') {
     if (p.cwd) state.cwd = p.cwd
     if (p.model) state.model = p.model

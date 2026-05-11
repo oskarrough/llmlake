@@ -6,7 +6,7 @@
 // JSON file. For each source: parse → write temp JSON → send `COPY ... TO ...`
 // over duckdb's stdin → wait for a `.print <marker>` sentinel on stdout.
 // Reusing the duckdb process amortizes its startup across all files in a run.
-import { basename, dirname, join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { mkdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import {
@@ -31,7 +31,8 @@ async function fileMtime(path: string): Promise<number | null> {
 }
 
 function outPathFor(agent: Agent, src: string): string {
-  return join(parquetRoot, `agent=${agent}`, basename(src).replace(/\.jsonl$/, '.parquet'))
+  const rel = relative(join(root, agent), src).replace(/\.jsonl$/, '.parquet')
+  return join(parquetRoot, `agent=${agent}`, rel)
 }
 
 async function parseFile(src: string, agent: Agent): Promise<Row[]> {
