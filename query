@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB="$ROOT/data/llmlake.duckdb"
+PARQUET="$ROOT/data/parquet/**/*.parquet"
+INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true);"
+
+if [[ "${1:-}" == "-c" ]]; then
+  shift
+  duckdb "$DB" -c "$INIT $*"
+elif [[ $# -gt 0 ]]; then
+  duckdb "$DB" -cmd "$INIT" < "$1"
+else
+  duckdb "$DB" -cmd "$INIT" -cmd ".tables" -cmd "SELECT agent, count(*) AS rows, count(DISTINCT session_id) AS sessions FROM events GROUP BY 1 ORDER BY 1;"
+fi
