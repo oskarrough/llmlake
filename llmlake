@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
+
+if [[ $# -eq 0 ]]; then
+  cat <<'EOF'
+Usage: ./llmlake <command>
+
+Commands:
+  collect  Copy local LLM session logs into ./data/sessions
+  build    Transform collected sessions into parquet files in ./data/parquet
+  query    Query the parquet data with duckdb
+
+Examples:
+  ./llmlake collect
+  ./llmlake build
+  ./llmlake query -c "SELECT count(*) FROM events;"
+EOF
+  exit 0
+fi
+
 [[ "$1" == "query" ]] && exec ./query "${@:2}"
 exec bun run "$1.ts" "${@:2}"

@@ -11,7 +11,7 @@
 //   payload.cwd    working directory on session_meta events
 //   payload.model  model name on selected response/request events
 //
-// Quirks to handle in build-parquet (not here):
+// Quirks to handle in build-one (not here):
 //   - session_id is only on session_meta; derive from filename for other rows.
 //   - cwd is only on session_meta; forward-fill onto later rows.
 //   - model lives in turn_context rows, not on message rows; forward-fill.

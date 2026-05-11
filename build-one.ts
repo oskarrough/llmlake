@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Parse one agent JSONL session into a normalized parquet file.
-// Usage: ./build-parquet.ts <session.jsonl> [out.parquet]
+// Usage: ./build-one.ts <session.jsonl> [out.parquet]
 import { basename, dirname, join, relative } from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import {
@@ -15,7 +15,7 @@ import {
 
 const src = process.argv[2]
 if (!src) {
-  console.error('usage: build-parquet.ts <session.jsonl> [out.parquet]')
+  console.error('usage: build-one.ts <session.jsonl> [out.parquet]')
   process.exit(1)
 }
 
