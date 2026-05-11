@@ -26,8 +26,8 @@ const src = join(homedir(), '.codex/sessions/')
 const dst = join(import.meta.dir, 'data/sessions/codex/')
 
 if (!existsSync(src)) {
-	console.warn(`skipped codex: ${src} does not exist`)
-	process.exit(0)
+  console.warn(`skipped codex: ${src} does not exist`)
+  process.exit(0)
 }
 
 await $`mkdir -p ${dst}`

@@ -19,8 +19,8 @@ const src = join(homedir(), '.hermes/sessions/')
 const dst = join(import.meta.dir, 'data/sessions/hermes/')
 
 if (!existsSync(src)) {
-	console.warn(`skipped hermes: ${src} does not exist`)
-	process.exit(0)
+  console.warn(`skipped hermes: ${src} does not exist`)
+  process.exit(0)
 }
 
 await $`mkdir -p ${dst}`

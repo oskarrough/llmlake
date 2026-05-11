@@ -23,8 +23,8 @@ const src = join(homedir(), '.claude/projects/')
 const dst = join(import.meta.dir, 'data/sessions/claude/')
 
 if (!existsSync(src)) {
-	console.warn(`skipped claude: ${src} does not exist`)
-	process.exit(0)
+  console.warn(`skipped claude: ${src} does not exist`)
+  process.exit(0)
 }
 
 await $`mkdir -p ${dst}`

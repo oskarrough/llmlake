@@ -223,8 +223,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   // run is its own session in analytics, and keep the real parent sessionId
   // in parent_session_id for rollups.
   if (state.subagent_suffix == null) {
-    state.subagent_suffix =
-      ctx.sourceFile.match(/\/subagents\/(agent-[^/]+?)\.jsonl$/)?.[1] ?? null
+    state.subagent_suffix = ctx.sourceFile.match(/\/subagents\/(agent-[^/]+?)\.jsonl$/)?.[1] ?? null
   }
 
   const rawSessionId =

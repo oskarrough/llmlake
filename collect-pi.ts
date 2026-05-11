@@ -14,8 +14,8 @@ const src = join(homedir(), '.pi/agent/sessions/')
 const dst = join(import.meta.dir, 'data/sessions/pi/')
 
 if (!existsSync(src)) {
-	console.warn(`skipped pi: ${src} does not exist`)
-	process.exit(0)
+  console.warn(`skipped pi: ${src} does not exist`)
+  process.exit(0)
 }
 
 await $`mkdir -p ${dst}`
