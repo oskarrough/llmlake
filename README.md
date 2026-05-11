@@ -10,6 +10,10 @@ Git clone github.org/oskarrough/llmlake and install [Duckdb](https://duckdb.org/
 
 Moves all raw session files from your local computer into `./data/sessions`. The `data` folder is gitignored.
 
+`./llmlake sync <path>`
+
+Two-way rsync between `data/sessions/` and a shared folder, so multiple devices share one library.
+
 `./llmlake build`
 
 Transforms them into parquet files inside `data/parquet`.

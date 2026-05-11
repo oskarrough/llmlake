@@ -7,11 +7,13 @@ Usage: ./llmlake <command>
 
 Commands:
   collect  Copy local LLM session logs into ./data/sessions
+  sync     Two-way merge ./data/sessions with a shared library folder
   build    Transform collected sessions into parquet files in ./data/parquet
   query    Query the parquet data with duckdb
 
 Examples:
   ./llmlake collect
+  ./llmlake sync ~/Dropbox/Apps/llmlake/sessions
   ./llmlake build
   ./llmlake query -c "SELECT count(*) FROM events;"
 EOF
@@ -19,4 +21,5 @@ EOF
 fi
 
 [[ "$1" == "query" ]] && exec ./query "${@:2}"
+[[ "$1" == "sync" ]] && exec ./sync "${@:2}"
 exec bun run "$1.ts" "${@:2}"
