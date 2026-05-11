@@ -3,15 +3,19 @@
 // Usage: ./build-one.ts <session.jsonl> [out.parquet]
 import { basename, dirname, join, relative } from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
+import { Schema } from 'effect'
 import {
   AGENTS,
   colsSql,
   newState,
   parseLine,
+  RowSchema,
   type Agent,
   type ParseContext,
   type Row,
 } from './parse-session.ts'
+
+const validateRow = Schema.validateSync(RowSchema)
 
 const src = process.argv[2]
 if (!src) {
@@ -42,7 +46,15 @@ const rows: Row[] = []
 const lines = (await Bun.file(src).text()).split('\n')
 for (let i = 0; i < lines.length; i++) {
   const line = lines[i]
-  if (line) rows.push(...parseLine(line, i + 1, ctx))
+  if (!line) continue
+  for (const row of parseLine(line, i + 1, ctx)) {
+    try {
+      rows.push(validateRow(row))
+    } catch (cause) {
+      console.error(`row validation failed at ${ctx.sourceFile}:${i + 1}`)
+      throw cause
+    }
+  }
 }
 
 await mkdir(dirname(out), { recursive: true })

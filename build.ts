@@ -9,15 +9,21 @@
 import { dirname, join, relative } from 'node:path'
 import { mkdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { Schema } from 'effect'
 import {
   AGENTS,
   colsSql,
   newState,
   parseLine,
+  RowSchema,
   type Agent,
   type ParseContext,
   type Row,
 } from './parse-session.ts'
+
+// Validate each row against RowSchema at parse time so a bad row is caught
+// here (with file:line context) rather than as a cryptic duckdb COPY failure.
+const validateRow = Schema.validateSync(RowSchema)
 
 const root = join(import.meta.dir, 'data/sessions')
 const parquetRoot = join(import.meta.dir, 'data/parquet')
@@ -41,7 +47,19 @@ async function parseFile(src: string, agent: Agent): Promise<Row[]> {
   const lines = (await Bun.file(src).text()).split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (line) rows.push(...parseLine(line, i + 1, ctx))
+    if (!line) continue
+    for (const row of parseLine(line, i + 1, ctx)) {
+      try {
+        rows.push(validateRow(row))
+      } catch (cause) {
+        throw new Error(
+          `row validation failed at ${ctx.sourceFile}:${i + 1}: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          { cause },
+        )
+      }
+    }
   }
   return rows
 }
