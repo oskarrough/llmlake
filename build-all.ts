@@ -1,10 +1,14 @@
 #!/usr/bin/env bun
 // Build parquet for every collected JSONL session under data/sessions/.
-// Skips files whose output parquet is newer than the source jsonl, so reruns
-// only touch sessions that changed. Each changed file is parsed in-process and
-// written via its own short-lived duckdb COPY, run across a worker pool.
+// Skips files whose output parquet is newer than the source jsonl.
+//
+// Each concurrent worker owns one long-lived `duckdb` process and one temp
+// JSON file. For each source: parse → write temp JSON → send `COPY ... TO ...`
+// over duckdb's stdin → wait for a `.print <marker>` sentinel on stdout.
+// Reusing the duckdb process amortizes its startup across all files in a run.
 import { basename, dirname, join, relative } from 'node:path'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, stat, unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import {
   AGENTS,
   colsSql,
@@ -30,66 +34,101 @@ function outPathFor(agent: Agent, src: string): string {
   return join(parquetRoot, `agent=${agent}`, basename(src).replace(/\.jsonl$/, '.parquet'))
 }
 
-async function buildOne(src: string): Promise<'built' | 'skipped' | 'error'> {
-  const rel = relative(root, src)
-  const agent = rel.split(/[\\/]/)[0] as Agent
-  if (!AGENTS.includes(agent)) return 'error'
-
-  const out = outPathFor(agent, src)
-  const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(out)])
-  if (srcM != null && outM != null && outM >= srcM) return 'skipped'
-
-  const ctx: ParseContext = { agent, sourceFile: rel, state: newState() }
+async function parseFile(src: string, agent: Agent): Promise<Row[]> {
+  const ctx: ParseContext = { agent, sourceFile: relative(root, src), state: newState() }
   const rows: Row[] = []
   const lines = (await Bun.file(src).text()).split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (line) rows.push(parseLine(line, i + 1, ctx))
   }
+  return rows
+}
 
-  await mkdir(dirname(out), { recursive: true })
-  const proc = Bun.spawn(
-    [
-      'duckdb',
-      '-c',
-      `COPY (SELECT * FROM read_json('/dev/stdin', format='newline_delimited', columns={${colsSql}})) TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD)`,
-    ],
-    {
-      stdin: new Blob([rows.map((r) => JSON.stringify(r)).join('\n') + '\n']),
-      stdout: 'ignore',
-      stderr: 'inherit',
-    },
-  )
-  if ((await proc.exited) !== 0) return 'error'
-  return 'built'
+class DuckdbWorker {
+  private proc = Bun.spawn(['duckdb'], { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' })
+  private reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader()
+  private tmpJson: string
+  private decoder = new TextDecoder()
+  private buffer = ''
+  private seq = 0
+
+  constructor(id: number) {
+    this.tmpJson = join(tmpdir(), `llmlake-${process.pid}-${id}.json`)
+  }
+
+  async copy(rows: Row[], out: string): Promise<void> {
+    await Bun.write(this.tmpJson, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+    const marker = `__llmlake_done_${++this.seq}__`
+    this.proc.stdin.write(
+      `COPY (SELECT * FROM read_json('${this.tmpJson}', format='newline_delimited', columns={${colsSql}})) ` +
+        `TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
+    )
+    await this.proc.stdin.flush()
+    while (!this.buffer.includes(marker)) {
+      const { value, done } = await this.reader.read()
+      if (done) throw new Error('duckdb exited before marker')
+      this.buffer += this.decoder.decode(value, { stream: true })
+    }
+    this.buffer = this.buffer.slice(this.buffer.indexOf(marker) + marker.length)
+  }
+
+  async close(): Promise<void> {
+    this.proc.stdin.end()
+    await this.proc.exited
+    await unlink(this.tmpJson).catch(() => {})
+  }
 }
 
 const files: string[] = []
-const glob = new Bun.Glob('**/*.jsonl')
-for await (const f of glob.scan({ cwd: root, absolute: true })) files.push(f)
+for await (const f of new Bun.Glob('**/*.jsonl').scan({ cwd: root, absolute: true })) files.push(f)
 
 const envC = process.env.BUILD_CONCURRENCY ? Number(process.env.BUILD_CONCURRENCY) : null
 const concurrency =
   envC && envC > 0 ? envC : Math.max(2, Math.min(16, navigator.hardwareConcurrency ?? 4))
+
 let built = 0
 let skipped = 0
 let errors = 0
 let cursor = 0
 
-async function worker() {
-  while (true) {
-    const i = cursor++
-    if (i >= files.length) return
-    const f = files[i]
-    if (!f) return
-    const result = await buildOne(f)
-    if (result === 'built') built++
-    else if (result === 'skipped') skipped++
-    else errors++
+async function workerLoop(id: number) {
+  let worker: DuckdbWorker | undefined
+  try {
+    while (true) {
+      const i = cursor++
+      if (i >= files.length) return
+      const src = files[i]
+      if (!src) return
+      try {
+        const rel = relative(root, src)
+        const agent = rel.split(/[\\/]/)[0] as Agent
+        if (!AGENTS.includes(agent)) {
+          errors++
+          continue
+        }
+        const out = outPathFor(agent, src)
+        const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(out)])
+        if (srcM != null && outM != null && outM >= srcM) {
+          skipped++
+          continue
+        }
+        const rows = await parseFile(src, agent)
+        await mkdir(dirname(out), { recursive: true })
+        worker ??= new DuckdbWorker(id)
+        await worker.copy(rows, out)
+        built++
+      } catch (e) {
+        errors++
+        console.error(`error on ${src}:`, e)
+      }
+    }
+  } finally {
+    await worker?.close()
   }
 }
 
-await Promise.all(Array.from({ length: concurrency }, () => worker()))
+await Promise.all(Array.from({ length: concurrency }, (_, i) => workerLoop(i)))
 
 console.log(
   `built ${built}, skipped ${skipped}${errors ? `, errors ${errors}` : ''} (of ${files.length})`,
