@@ -2,6 +2,7 @@
 // normalized Row in the llmlake schema. The driver supplies a ParseContext
 // (agent, source file path, mutable state carried across lines).
 import { basename } from 'node:path'
+import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
 export const AGENTS = ['claude', 'pi', 'codex'] as const
 export type Agent = (typeof AGENTS)[number]
@@ -30,6 +31,7 @@ export const COLUMNS = {
   tool_output: 'JSON',
   stop_reason: 'VARCHAR',
   cwd: 'VARCHAR',
+  is_subagent: 'BOOLEAN',
   source_file: 'VARCHAR',
   source_line: 'BIGINT',
   raw: 'JSON',
@@ -46,6 +48,8 @@ export type EventType =
   | 'tool_result'
   | 'reasoning'
   | 'session_meta'
+  | 'usage'
+  | 'compacted'
   | 'other'
 
 export type Row = {
@@ -71,6 +75,7 @@ export type Row = {
   tool_output: unknown
   stop_reason: string | null
   cwd: string | null
+  is_subagent: boolean
   source_file: string
   source_line: number
   raw: unknown
@@ -81,6 +86,8 @@ export type ParseState = {
   cwd: string | null
   model: string | null
   provider: string | null
+  is_subagent: boolean
+  seenEventIds: Set<string>
 }
 
 export type ParseContext = {
@@ -90,7 +97,14 @@ export type ParseContext = {
 }
 
 export function newState(): ParseState {
-  return { session_id: null, cwd: null, model: null, provider: null }
+  return {
+    session_id: null,
+    cwd: null,
+    model: null,
+    provider: null,
+    is_subagent: false,
+    seenEventIds: new Set(),
+  }
 }
 
 function maybeJson(value: unknown): unknown {
@@ -148,18 +162,50 @@ function baseRow(ev: unknown, lineNo: number, ctx: ParseContext): Row {
     tool_output: null,
     stop_reason: null,
     cwd: ctx.state.cwd,
+    is_subagent: ctx.state.is_subagent,
     source_file: ctx.sourceFile,
     source_line: lineNo,
     raw: ev,
   }
 }
 
-function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row {
+const CLAUDE_META_TYPES = new Set([
+  'attachment',
+  'system',
+  'permission-mode',
+  'last-prompt',
+  'file-history-snapshot',
+  'progress',
+  'agent-setting',
+  'ai-title',
+  'queue-operation',
+  'agent-name',
+  'custom-title',
+])
+
+function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row[] {
   const { state } = ctx
   const ev = JSON.parse(line)
   const msg = ev.message ?? {}
   const usage = msg.usage ?? {}
   const content = msg.content
+
+  // Claude sometimes appends a subagent event twice to a subagent JSONL
+  // (same uuid, byte-identical line). Drop the second copy so per-session
+  // token/cost totals aren't inflated.
+  if (typeof ev.uuid === 'string') {
+    if (state.seenEventIds.has(ev.uuid)) return []
+    state.seenEventIds.add(ev.uuid)
+  }
+
+  // Fallback: pull session_id from filename when the first event is housekeeping
+  // (file-history-snapshot, permission-mode, etc.) and has no sessionId field.
+  if (state.session_id == null) {
+    const m = basename(ctx.sourceFile).match(
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/,
+    )
+    state.session_id = m?.[1] ?? null
+  }
 
   if (ev.sessionId) state.session_id = ev.sessionId
   if (ev.cwd) state.cwd = ev.cwd
@@ -178,9 +224,14 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row {
   row.cache_write_tokens = usage.cache_creation_input_tokens ?? null
   row.stop_reason = msg.stop_reason ?? null
   row.cwd = ev.cwd ?? state.cwd
+  // Claude's raw flag is `isSidechain`; we surface it under the unified
+  // `is_subagent` name. Subagent rows can be interleaved with main-thread
+  // rows inside the same file.
+  row.is_subagent = ev.isSidechain === true
 
   if (ev.type === 'user') row.event_type = 'user_message'
   else if (ev.type === 'assistant') row.event_type = 'assistant_message'
+  else if (CLAUDE_META_TYPES.has(ev.type)) row.event_type = 'session_meta'
 
   if (typeof content === 'string') {
     row.text = content
@@ -215,10 +266,35 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row {
     row.event_type = 'tool_call'
   }
 
+  row.cost_usd = computeClaudeCost(row.model, row)
+
+  // If a 'reasoning' turn also carries a tool_use, emit a separate tool_call row
+  // so the result has a matching call. (Claude messages hold 0 or 1 tool_use blocks.)
+  if (row.event_type === 'reasoning' && row.tool_call_id) {
+    const sub = baseRow(ev, lineNo, ctx)
+    sub.row_id = `${row.row_id}-tc`
+    sub.ts = row.ts
+    sub.session_id = row.session_id
+    sub.event_id = row.event_id ? `${row.event_id}-tc` : null
+    sub.parent_id = row.event_id ?? row.parent_id
+    sub.role = row.role
+    sub.model = row.model
+    sub.provider = row.provider
+    sub.cwd = row.cwd
+    sub.is_subagent = row.is_subagent
+    sub.event_type = 'tool_call'
+    sub.tool_name = row.tool_name
+    sub.tool_call_id = row.tool_call_id
+    sub.tool_input = row.tool_input
+    row.tool_name = null
+    row.tool_call_id = null
+    row.tool_input = null
+    return [row, sub]
+  }
   return row
 }
 
-function parsePi(line: string, lineNo: number, ctx: ParseContext): Row {
+function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
   const ev = JSON.parse(line)
   const msg = ev.message ?? {}
@@ -258,21 +334,12 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row {
   row.stop_reason = msg.stopReason ?? msg.stop_reason ?? null
   row.cwd = ev.cwd ?? state.cwd
 
-  if (ev.type === 'session') row.event_type = 'session_meta'
-  else if (ev.type === 'message') {
+  if (ev.type === 'session' || ev.type === 'model_change' || ev.type === 'thinking_level_change') {
+    row.event_type = 'session_meta'
+  } else if (ev.type === 'message') {
     if (role === 'user') row.event_type = 'user_message'
     else if (role === 'assistant') row.event_type = hasThinking ? 'reasoning' : 'assistant_message'
     else if (role === 'tool') row.event_type = 'tool_result'
-  }
-
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (block?.type === 'toolCall') {
-        row.tool_name ??= block.name ?? null
-        row.tool_call_id ??= block.id ?? null
-        row.tool_input ??= maybeJson(block.arguments)
-      }
-    }
   }
 
   if (role === 'tool') {
@@ -282,11 +349,58 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row {
     row.event_type = 'tool_result'
   }
 
-  if (row.event_type === 'assistant_message' && row.tool_name && !row.text) {
-    row.event_type = 'tool_call'
+  // Assistant turns can contain multiple toolCall blocks. Emit one tool_call row per block
+  // and keep the parent row (carrying tokens + thinking/text) only if there's something to keep.
+  const toolCalls: { name: string | null; id: string | null; input: unknown }[] = []
+  if (role === 'assistant' && Array.isArray(content)) {
+    for (const block of content) {
+      if (block?.type === 'toolCall') {
+        toolCalls.push({
+          name: block.name ?? null,
+          id: block.id ?? null,
+          input: maybeJson(block.arguments),
+        })
+      }
+    }
   }
 
-  return row
+  if (toolCalls.length === 0) return [row]
+
+  const rows: Row[] = []
+  // Keep the parent row only when it has content of its own (text or thinking).
+  // If the assistant turn is tool-calls-only, the first tool_call carries the tokens.
+  const keepParent = !!text || hasThinking
+  if (keepParent) rows.push(row)
+
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i]!
+    const sub = baseRow(ev, lineNo, ctx)
+    sub.row_id = `${row.row_id}-${i}`
+    sub.ts = row.ts
+    sub.session_id = row.session_id
+    sub.event_id = row.event_id ? `${row.event_id}-${i}` : null
+    sub.parent_id = row.event_id ?? row.parent_id
+    sub.role = role
+    sub.model = row.model
+    sub.provider = row.provider
+    sub.cwd = row.cwd
+    sub.event_type = 'tool_call'
+    sub.tool_name = tc.name
+    sub.tool_call_id = tc.id
+    sub.tool_input = tc.input
+    // Tokens belong to the message, not each block. Put them on the first emitted row
+    // when there's no parent row to carry them.
+    if (!keepParent && i === 0) {
+      sub.input_tokens = row.input_tokens
+      sub.output_tokens = row.output_tokens
+      sub.cache_read_tokens = row.cache_read_tokens
+      sub.cache_write_tokens = row.cache_write_tokens
+      sub.cost_usd = row.cost_usd
+      sub.stop_reason = row.stop_reason
+    }
+    rows.push(sub)
+  }
+  return rows
 }
 
 function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
@@ -305,6 +419,12 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
     if (p.id) state.session_id = p.id
     if (p.cwd) state.cwd = p.cwd
     if (p.model_provider) state.provider = p.model_provider
+    // Codex spawns subagent threads as separate sessions. session_meta carries
+    // source.subagent (and a forked_from_id) on spawned threads; apply that
+    // flag to every row in the file.
+    if (p.source?.subagent != null || p.forked_from_id != null) {
+      state.is_subagent = true
+    }
   } else if (ev.type === 'turn_context') {
     if (p.cwd) state.cwd = p.cwd
     if (p.model) state.model = p.model
@@ -313,9 +433,13 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
   const row = baseRow(ev, lineNo, ctx)
   row.ts = ev.timestamp ?? null
 
-  if (ev.type === 'session_meta') {
+  if (ev.type === 'session_meta' || ev.type === 'turn_context') {
     row.event_type = 'session_meta'
+  } else if (ev.type === 'compacted') {
+    row.event_type = 'compacted'
+    if (typeof p.message === 'string') row.text = p.message
   } else if (ev.type === 'event_msg') {
+    row.event_type = 'usage'
     const last = p.info?.last_token_usage
     if (last) {
       row.input_tokens = last.input_tokens ?? null
@@ -347,18 +471,27 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row {
       for (const b of p.summary ?? []) if (typeof b?.text === 'string') texts.push(b.text)
       for (const b of p.content ?? []) if (typeof b?.text === 'string') texts.push(b.text)
       if (texts.length) row.text = texts.join('\n')
+    } else if (p.type === 'web_search_call') {
+      row.event_type = 'tool_call'
+      row.tool_name = 'web_search'
+      row.tool_call_id = p.id ?? null
+      row.tool_input = maybeJson(p.action ?? p.query ?? null)
     }
   }
 
+  if (row.input_tokens != null || row.output_tokens != null) {
+    row.cost_usd = computeCodexCost(row.model, row)
+  }
   return row
 }
 
-const PARSERS: Record<Agent, (l: string, n: number, c: ParseContext) => Row> = {
+const PARSERS: Record<Agent, (l: string, n: number, c: ParseContext) => Row | Row[]> = {
   claude: parseClaude,
   pi: parsePi,
   codex: parseCodex,
 }
 
-export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row {
-  return PARSERS[ctx.agent](line, lineNo, ctx)
+export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row[] {
+  const result = PARSERS[ctx.agent](line, lineNo, ctx)
+  return Array.isArray(result) ? result : [result]
 }

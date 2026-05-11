@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{report.title}}</title>
+  </head>
+  <body>
+    <header>
+      <p>Agent workflow insights</p>
+      <h1>{{report.title}}</h1>
+      <p>
+        <time datetime="{{period.start_iso}}">{{period.start_label}}</time>
+        to
+        <time datetime="{{period.end_iso}}">{{period.end_label}}</time>
+      </p>
+      <p>{{report.scope_summary}}</p>
+    </header>
+
+    <nav aria-labelledby="contents-heading">
+      <h2 id="contents-heading">Contents</h2>
+      <ol>
+        <li><a href="#at-a-glance">At a glance</a></li>
+        <li><a href="#what-went-wrong">What went wrong</a></li>
+        <li><a href="#report-basis">Report basis</a></li>
+        <li><a href="#where-time-went">Where time went</a></li>
+        <li><a href="#where-tokens-went">Where tokens went</a></li>
+        <li><a href="#what-you-worked-on">What you worked on</a></li>
+        <li><a href="#how-you-use-agents">How you use agents</a></li>
+        <li><a href="#what-worked">What worked</a></li>
+        <li><a href="#model-tool-calling">Model tool calling</a></li>
+        <li><a href="#context-and-tool-waste">Context and tool waste</a></li>
+        <li><a href="#harness-changes">Harness changes to consider</a></li>
+        <li><a href="#workflows-to-try">Workflows to try next</a></li>
+        <li><a href="#instructions-worth-adding">Instructions worth adding</a></li>
+        <li><a href="#notable-incidents">Notable incidents</a></li>
+        <li><a href="#data-quality">Data quality</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section id="at-a-glance" aria-labelledby="at-a-glance-heading">
+        <h2 id="at-a-glance-heading">At a glance</h2>
+        <article>
+          <h3>Most useful thing to know</h3>
+          <p>{{glance.most_useful_thing}}</p>
+          <p><strong>Evidence strength:</strong> {{glance.evidence_strength}}</p>
+        </article>
+        <article>
+          <h3>What is working</h3>
+          <p>{{glance.working_summary}}</p>
+        </article>
+        <article>
+          <h3>What is getting in the way</h3>
+          <p>{{glance.hindering_summary}}</p>
+        </article>
+        <article>
+          <h3>Best next change</h3>
+          <p>{{glance.best_next_change}}</p>
+        </article>
+      </section>
+
+      <section id="what-went-wrong" aria-labelledby="what-went-wrong-heading">
+        <h2 id="what-went-wrong-heading">What went wrong</h2>
+        <p>{{wrong.summary}}</p>
+        <ol>
+          <!-- Repeat for each ranked avoidable cost. Rank by time lost, tokens wasted, repeated correction, failed/retried tools, and blast radius. -->
+          <li>
+            <article>
+              <h3>{{wrong_item.pattern}}</h3>
+              <p>{{wrong_item.explanation}}</p>
+              <dl>
+                <dt>Estimated cost</dt>
+                <dd>{{wrong_item.estimated_cost}}</dd>
+                <dt>Affected sessions</dt>
+                <dd>{{wrong_item.affected_sessions}}</dd>
+                <dt>Affected models</dt>
+                <dd>{{wrong_item.affected_models}}</dd>
+                <dt>Affected tools</dt>
+                <dd>{{wrong_item.affected_tools}}</dd>
+                <dt>Evidence</dt>
+                <dd>{{wrong_item.evidence}}</dd>
+                <dt>Evidence strength</dt>
+                <dd>{{wrong_item.evidence_strength}}</dd>
+                <dt>Smallest fix</dt>
+                <dd>{{wrong_item.smallest_fix}}</dd>
+              </dl>
+            </article>
+          </li>
+        </ol>
+      </section>
+
+      <section id="report-basis" aria-labelledby="report-basis-heading">
+        <h2 id="report-basis-heading">Report basis</h2>
+        <p>{{basis.interpretation}}</p>
+        <dl>
+          <!-- Include only metrics that support a claim elsewhere in the report. -->
+          <dt>{{metric.name}}</dt>
+          <dd>{{metric.value}}. {{metric.why_it_matters}}</dd>
+        </dl>
+      </section>
+
+      <section id="where-time-went" aria-labelledby="where-time-went-heading">
+        <h2 id="where-time-went-heading">Where time went</h2>
+        <p>{{time.summary}}</p>
+        <table>
+          <caption>
+            Time by work category
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Work category</th>
+              <th scope="col">Sessions</th>
+              <th scope="col">Estimated time</th>
+              <th scope="col">Share</th>
+              <th scope="col">Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Repeat for each meaningful work category. -->
+            <tr>
+              <th scope="row">{{time_category.name}}</th>
+              <td>{{time_category.session_count}}</td>
+              <td>{{time_category.estimated_time}}</td>
+              <td>{{time_category.share}}</td>
+              <td>{{time_category.interpretation}}</td>
+            </tr>
+          </tbody>
+        </table>
+        <aside>
+          <h3>Time sink to investigate</h3>
+          <p>{{time.time_sink.summary}}</p>
+          <p><strong>Evidence:</strong> {{time.time_sink.evidence}}</p>
+          <p><strong>Smallest fix:</strong> {{time.time_sink.smallest_fix}}</p>
+        </aside>
+      </section>
+
+      <section id="where-tokens-went" aria-labelledby="where-tokens-went-heading">
+        <h2 id="where-tokens-went-heading">Where tokens went</h2>
+        <p>{{tokens.summary}}</p>
+        <table>
+          <caption>
+            Token usage by source
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Source</th>
+              <th scope="col">Input tokens</th>
+              <th scope="col">Output tokens</th>
+              <th scope="col">Cached tokens</th>
+              <th scope="col">Share</th>
+              <th scope="col">Usefulness</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Repeat for user instructions, repository context, tool results, reasoning/planning, and any other meaningful source. -->
+            <tr>
+              <th scope="row">{{token_source.name}}</th>
+              <td>{{token_source.input_tokens}}</td>
+              <td>{{token_source.output_tokens}}</td>
+              <td>{{token_source.cached_tokens}}</td>
+              <td>{{token_source.share}}</td>
+              <td>{{token_source.usefulness}}</td>
+            </tr>
+          </tbody>
+        </table>
+        <article>
+          <h3>Token waste pattern</h3>
+          <p>{{tokens.waste_pattern.summary}}</p>
+          <p><strong>Evidence:</strong> {{tokens.waste_pattern.evidence}}</p>
+          <p><strong>Fix:</strong> {{tokens.waste_pattern.fix}}</p>
+        </article>
+        <article>
+          <h3>Highest-value token spend</h3>
+          <p>{{tokens.high_value_spend}}</p>
+        </article>
+      </section>
+
+      <section id="what-you-worked-on" aria-labelledby="what-you-worked-on-heading">
+        <h2 id="what-you-worked-on-heading">What you worked on</h2>
+        <p>{{work.summary}}</p>
+        <!-- Repeat for each major body of work. Prefer 4-7 themes over raw task labels. -->
+        <article>
+          <h3>{{work_theme.name}}</h3>
+          <p>{{work_theme.session_count}} sessions</p>
+          <p>{{work_theme.summary}}</p>
+          <p><strong>Measured outcomes:</strong> {{work_theme.measured_outcomes}}</p>
+          <p><strong>Evidence strength:</strong> {{work_theme.evidence_strength}}</p>
+        </article>
+      </section>
+
+      <section id="how-you-use-agents" aria-labelledby="how-you-use-agents-heading">
+        <h2 id="how-you-use-agents-heading">How you use agents</h2>
+        <p>{{agent_usage.summary}}</p>
+        <dl>
+          <dt>Prompting style</dt>
+          <dd>{{agent_usage.prompting_style}}</dd>
+          <dt>Autonomy tolerance</dt>
+          <dd>{{agent_usage.autonomy_tolerance}}</dd>
+          <dt>Interruption pattern</dt>
+          <dd>{{agent_usage.interruption_pattern}}</dd>
+          <dt>Verification style</dt>
+          <dd>{{agent_usage.verification_style}}</dd>
+          <dt>Parallel work</dt>
+          <dd>{{agent_usage.parallel_work}}</dd>
+          <dt>Evidence strength</dt>
+          <dd>{{agent_usage.evidence_strength}}</dd>
+        </dl>
+      </section>
+
+      <section id="what-worked" aria-labelledby="what-worked-heading">
+        <h2 id="what-worked-heading">What worked</h2>
+        <p>{{worked.summary}}</p>
+        <!-- Repeat for each strong outcome or high-performing workflow. -->
+        <article>
+          <h3>{{worked_item.headline}}</h3>
+          <p>{{worked_item.why_it_matters}}</p>
+          <p><strong>Evidence:</strong> {{worked_item.evidence}}</p>
+          <p><strong>Evidence strength:</strong> {{worked_item.evidence_strength}}</p>
+        </article>
+      </section>
+
+      <section id="model-tool-calling" aria-labelledby="model-tool-calling-heading">
+        <h2 id="model-tool-calling-heading">Model tool calling</h2>
+        <p>{{model_tools.summary}}</p>
+        <table>
+          <caption>
+            Tool-calling behavior by model
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col">Sessions</th>
+              <th scope="col">Tool calls</th>
+              <th scope="col">Calls per session</th>
+              <th scope="col">Failure rate</th>
+              <th scope="col">Retry behavior</th>
+              <th scope="col">Tool output tokens</th>
+              <th scope="col">Best at</th>
+              <th scope="col">Fails when</th>
+              <th scope="col">Recommended tool budget</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Repeat for each model. Do not imply a model is generally bad when the evidence shows a task mismatch. -->
+            <tr>
+              <th scope="row">{{model.name}}</th>
+              <td>{{model.session_count}}</td>
+              <td>{{model.tool_call_count}}</td>
+              <td>{{model.calls_per_session}}</td>
+              <td>{{model.failure_rate}}</td>
+              <td>{{model.retry_behavior}}</td>
+              <td>{{model.tool_output_tokens}}</td>
+              <td>{{model.best_at}}</td>
+              <td>{{model.fails_when}}</td>
+              <td>{{model.recommended_tool_budget}}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Repeat for each model that has enough evidence for a useful diagnosis. -->
+        <article>
+          <h3>{{model.name}}</h3>
+          <p>{{model.diagnostic_summary}}</p>
+          <dl>
+            <dt>Good incident</dt>
+            <dd>{{model.good_incident}}</dd>
+            <dt>Bad incident</dt>
+            <dd>{{model.bad_incident}}</dd>
+            <dt>Context impact</dt>
+            <dd>{{model.context_impact}}</dd>
+            <dt>Routing guidance</dt>
+            <dd>{{model.routing_guidance}}</dd>
+            <dt>Harness or prompt fix</dt>
+            <dd>{{model.fix}}</dd>
+            <dt>Evidence strength</dt>
+            <dd>{{model.evidence_strength}}</dd>
+          </dl>
+        </article>
+      </section>
+
+      <section id="context-and-tool-waste" aria-labelledby="context-and-tool-waste-heading">
+        <h2 id="context-and-tool-waste-heading">Context and tool waste</h2>
+        <p>{{waste.summary}}</p>
+
+        <section aria-labelledby="failed-tool-calls-heading">
+          <h3 id="failed-tool-calls-heading">Failed tool calls</h3>
+          <table>
+            <caption>
+              Most costly failed tool calls
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Tool</th>
+                <th scope="col">Failures</th>
+                <th scope="col">Failure rate</th>
+                <th scope="col">Common cause</th>
+                <th scope="col">Impact</th>
+                <th scope="col">Preventive change</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Repeat for each tool failure pattern worth showing. -->
+              <tr>
+                <th scope="row">{{tool_failure.tool_name}}</th>
+                <td>{{tool_failure.failure_count}}</td>
+                <td>{{tool_failure.failure_rate}}</td>
+                <td>{{tool_failure.common_cause}}</td>
+                <td>{{tool_failure.impact}}</td>
+                <td>{{tool_failure.preventive_change}}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section aria-labelledby="excessive-tool-calls-heading">
+          <h3 id="excessive-tool-calls-heading">Excessive tool calls</h3>
+          <p>{{excessive_tool_calls.summary}}</p>
+          <!-- Repeat for each over-calling pattern. -->
+          <article>
+            <h4>{{excessive_tool_call.pattern}}</h4>
+            <p>{{excessive_tool_call.explanation}}</p>
+            <p><strong>Cost:</strong> {{excessive_tool_call.cost}}</p>
+            <p><strong>Fix:</strong> {{excessive_tool_call.fix}}</p>
+          </article>
+        </section>
+
+        <section aria-labelledby="context-bloat-heading">
+          <h3 id="context-bloat-heading">Context bloat</h3>
+          <p>{{context_bloat.summary}}</p>
+          <dl>
+            <dt>Longest session</dt>
+            <dd>{{context_bloat.longest_session}}</dd>
+            <dt>Largest tool result</dt>
+            <dd>{{context_bloat.largest_tool_result}}</dd>
+            <dt>Repeated context</dt>
+            <dd>{{context_bloat.repeated_context}}</dd>
+            <dt>Stale context</dt>
+            <dd>{{context_bloat.stale_context}}</dd>
+            <dt>Best compaction candidate</dt>
+            <dd>{{context_bloat.best_compaction_candidate}}</dd>
+          </dl>
+        </section>
+      </section>
+
+      <section id="harness-changes" aria-labelledby="harness-changes-heading">
+        <h2 id="harness-changes-heading">Harness changes to consider</h2>
+        <p>{{harness.summary}}</p>
+        <!-- Repeat for each evidence-backed product or harness change. -->
+        <article>
+          <h3>{{harness_change.name}}</h3>
+          <p>{{harness_change.problem}}</p>
+          <p><strong>Proposed change:</strong> {{harness_change.proposed_change}}</p>
+          <p><strong>Why now:</strong> {{harness_change.evidence}}</p>
+          <p><strong>Expected effect:</strong> {{harness_change.expected_effect}}</p>
+          <p><strong>Evidence strength:</strong> {{harness_change.evidence_strength}}</p>
+        </article>
+      </section>
+
+      <section id="workflows-to-try" aria-labelledby="workflows-to-try-heading">
+        <h2 id="workflows-to-try-heading">Workflows to try next</h2>
+        <!-- Repeat for practical recommendations and more ambitious workflow ideas. -->
+        <article>
+          <h3>{{workflow.name}}</h3>
+          <p>{{workflow.why_it_fits}}</p>
+          <pre><code>{{workflow.starter_prompt_or_config}}</code></pre>
+          <p><strong>Expected payoff:</strong> {{workflow.expected_payoff}}</p>
+        </article>
+      </section>
+
+      <section id="instructions-worth-adding" aria-labelledby="instructions-worth-adding-heading">
+        <h2 id="instructions-worth-adding-heading">Instructions worth adding</h2>
+        <p>{{standing_instructions.summary}}</p>
+        <!-- Repeat for each instruction group supported by repeated incidents or one high-cost incident. -->
+        <article>
+          <h3>{{instruction_group.name}}</h3>
+          <pre><code>{{instruction_group.copy_paste_block}}</code></pre>
+          <p><strong>Why:</strong> {{instruction_group.evidence}}</p>
+        </article>
+      </section>
+
+      <section id="notable-incidents" aria-labelledby="notable-incidents-heading">
+        <h2 id="notable-incidents-heading">Notable incidents</h2>
+        <!-- Repeat for short quotes or incidents that explain a major claim. -->
+        <article>
+          <h3>{{incident.title}}</h3>
+          <blockquote>
+            <p>{{incident.quote_or_summary}}</p>
+          </blockquote>
+          <p>{{incident.what_it_illustrates}}</p>
+          <p><strong>Related claim:</strong> {{incident.related_claim}}</p>
+        </article>
+      </section>
+
+      <section id="data-quality" aria-labelledby="data-quality-heading">
+        <h2 id="data-quality-heading">Data quality</h2>
+        <p>{{data_quality.summary}}</p>
+        <dl>
+          <dt>Coverage</dt>
+          <dd>{{data_quality.coverage}}</dd>
+          <dt>Missing data</dt>
+          <dd>{{data_quality.missing_data}}</dd>
+          <dt>Confidence</dt>
+          <dd>{{data_quality.confidence}}</dd>
+          <dt>Known biases</dt>
+          <dd>{{data_quality.known_biases}}</dd>
+        </dl>
+      </section>
+    </main>
+
+    <footer>
+      <p>Generated {{report.generated_at}} from {{report.source_count}} source records.</p>
+    </footer>
+  </body>
+</html>

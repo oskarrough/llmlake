@@ -42,7 +42,7 @@ const rows: Row[] = []
 const lines = (await Bun.file(src).text()).split('\n')
 for (let i = 0; i < lines.length; i++) {
   const line = lines[i]
-  if (line) rows.push(parseLine(line, i + 1, ctx))
+  if (line) rows.push(...parseLine(line, i + 1, ctx))
 }
 
 await mkdir(dirname(out), { recursive: true })

@@ -40,7 +40,7 @@ async function parseFile(src: string, agent: Agent): Promise<Row[]> {
   const lines = (await Bun.file(src).text()).split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (line) rows.push(parseLine(line, i + 1, ctx))
+    if (line) rows.push(...parseLine(line, i + 1, ctx))
   }
   return rows
 }
