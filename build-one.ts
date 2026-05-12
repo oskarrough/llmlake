@@ -15,6 +15,13 @@ import {
   type Row,
 } from './parse-session.ts'
 
+try {
+  Bun.spawnSync(['duckdb', '--version'])
+} catch {
+  console.error('duckdb not found. Install it from https://duckdb.org/docs/installation/')
+  process.exit(1)
+}
+
 const validateRow = Schema.validateSync(RowSchema)
 
 const src = process.argv[2]
