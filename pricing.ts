@@ -26,6 +26,7 @@ export const PRICING: Record<string, Price> = {
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
 
   // OpenAI
+  'gpt-5-codex': { input: 1.75, output: 14.0 }, // pre-versioning name for 5.3-codex (seen Jan–Mar 2026)
   'gpt-5.3-codex': { input: 1.75, output: 14.0 },
   'gpt-5.4': { input: 2.5, output: 15.0 },
   'gpt-5.4-mini': { input: 0.75, output: 4.5 },
