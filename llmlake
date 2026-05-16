@@ -21,5 +21,4 @@ EOF
 fi
 
 [[ "$1" == "query" ]] && exec ./query "${@:2}"
-[[ "$1" == "sync" ]] && exec ./sync "${@:2}"
 exec bun run "$1.ts" "${@:2}"

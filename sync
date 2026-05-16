@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-DEST="${1:?usage: sync <dest>}"; DEST="${DEST/#~/$HOME}"
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data/sessions"
-mkdir -p "$DEST"
-rsync -a --stats "$SRC/" "$DEST/"
-rsync -a --stats "$DEST/" "$SRC/"
