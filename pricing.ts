@@ -43,11 +43,42 @@ type Tokens = {
   cache_write_tokens: number | null
 }
 
+const CODEX_DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/
+const CLAUDE_DATE_SUFFIX = /-\d{8}$/
+const CLAUDE_VERSION_SUFFIX = /-v\d+:\d+$/
+
+export function normalizeClaudeModel(raw: string): string {
+  let m = raw.trim()
+  if (m.startsWith('anthropic.')) m = m.slice('anthropic.'.length)
+  const dot = m.lastIndexOf('.')
+  if (dot >= 0 && m.includes('claude-')) {
+    const tail = m.slice(dot + 1)
+    if (tail.startsWith('claude-')) m = tail
+  }
+  m = m.replace(CLAUDE_VERSION_SUFFIX, '')
+  if (CLAUDE_DATE_SUFFIX.test(m)) {
+    const base = m.replace(CLAUDE_DATE_SUFFIX, '')
+    if (PRICING[base]) return base
+  }
+  return m
+}
+
+export function normalizeCodexModel(raw: string): string {
+  let m = raw.trim()
+  if (m.startsWith('openai/')) m = m.slice('openai/'.length)
+  if (PRICING[m]) return m
+  if (CODEX_DATE_SUFFIX.test(m)) {
+    const base = m.replace(CODEX_DATE_SUFFIX, '')
+    if (PRICING[base]) return base
+  }
+  return m
+}
+
 // Anthropic convention: input_tokens excludes cache reads/writes (they are
 // reported as separate counters). Total cost sums all four buckets.
 export function computeClaudeCost(model: string | null, t: Tokens): number | null {
   if (!model) return null
-  const p = PRICING[model]
+  const p = PRICING[normalizeClaudeModel(model)]
   if (!p) return null
   const cacheReadRate = p.cache_read ?? p.input * 0.1
   const cacheWriteRate = p.cache_write ?? p.input * 1.25
@@ -64,7 +95,7 @@ export function computeClaudeCost(model: string | null, t: Tokens): number | nul
 // input is the difference; cached portion is billed at the discounted rate.
 export function computeCodexCost(model: string | null, t: Tokens): number | null {
   if (!model) return null
-  const p = PRICING[model]
+  const p = PRICING[normalizeCodexModel(model)]
   if (!p) return null
   const cachedRate = p.cache_read ?? p.input * 0.25
   const inTok = t.input_tokens ?? 0

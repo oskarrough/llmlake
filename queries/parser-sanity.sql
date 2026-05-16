@@ -111,6 +111,34 @@ WITH checks AS (
 
   UNION ALL
 
+  -- claude: streaming chunks share message.id + requestId — only one row may carry tokens
+  SELECT 'claude: duplicate keyed assistant usage',
+         'claude',
+         count(*),
+         any_value(e.source_file || ':' || e.source_line),
+         'parseClaude should keep one token-bearing row per (session_id, message.id, requestId) across overlapping collect roots; multiple = streaming or cross-file dedup regression.'
+  FROM events e
+  INNER JOIN (
+    SELECT session_id,
+           json_extract_string(raw, '$.message.id') AS message_id,
+           json_extract_string(raw, '$.requestId') AS request_id
+    FROM events
+    WHERE agent = 'claude'
+      AND event_type IN ('assistant_message', 'reasoning')
+      AND json_extract_string(raw, '$.message.id') IS NOT NULL
+      AND json_extract_string(raw, '$.requestId') IS NOT NULL
+      AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
+    GROUP BY 1, 2, 3
+    HAVING count(*) > 1
+  ) d ON e.session_id = d.session_id
+     AND json_extract_string(e.raw, '$.message.id') = d.message_id
+     AND json_extract_string(e.raw, '$.requestId') = d.request_id
+  WHERE e.agent = 'claude'
+    AND e.event_type IN ('assistant_message', 'reasoning')
+    AND (e.input_tokens IS NOT NULL OR e.output_tokens IS NOT NULL)
+
+  UNION ALL
+
   -- INVARIANT: tokens belong to one row per raw line (no duplication on splits)
   SELECT 'all: tokens duplicated across split rows',
          agent,

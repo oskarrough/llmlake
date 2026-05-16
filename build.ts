@@ -12,12 +12,13 @@ import { tmpdir } from 'node:os'
 import { Schema } from 'effect'
 import {
   AGENTS,
+  buildCodexSessionIndex,
   colsSql,
-  newState,
-  parseLine,
+  makeParseContext,
+  newClaudeCrossFileRegistry,
+  parseSessionText,
   RowSchema,
   type Agent,
-  type ParseContext,
   type Row,
 } from './parse-session.ts'
 
@@ -34,6 +35,14 @@ const validateRow = Schema.validateSync(RowSchema)
 
 const root = join(import.meta.dir, 'data/sessions')
 const parquetRoot = join(import.meta.dir, 'data/parquet')
+const codexSessionIndex = await buildCodexSessionIndex(root)
+const claudeCrossFile = newClaudeCrossFileRegistry()
+
+for await (const src of new Bun.Glob('claude/**/*.jsonl').scan({ cwd: root, absolute: true })) {
+  const rel = relative(root, src)
+  const ctx = makeParseContext('claude', rel, root, codexSessionIndex, claudeCrossFile)
+  await parseSessionText(await Bun.file(src).text(), ctx, { registerClaudeCrossFile: true })
+}
 
 async function fileMtime(path: string): Promise<number | null> {
   try {
@@ -49,23 +58,25 @@ function outPathFor(agent: Agent, src: string): string {
 }
 
 async function parseFile(src: string, agent: Agent): Promise<Row[]> {
-  const ctx: ParseContext = { agent, sourceFile: relative(root, src), state: newState() }
+  const ctx = makeParseContext(
+    agent,
+    relative(root, src),
+    root,
+    codexSessionIndex,
+    agent === 'claude' ? claudeCrossFile : undefined,
+  )
+  const parsed = await parseSessionText(await Bun.file(src).text(), ctx)
   const rows: Row[] = []
-  const lines = (await Bun.file(src).text()).split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line) continue
-    for (const row of parseLine(line, i + 1, ctx)) {
-      try {
-        rows.push(validateRow(row))
-      } catch (cause) {
-        throw new Error(
-          `row validation failed at ${ctx.sourceFile}:${i + 1}: ${
-            cause instanceof Error ? cause.message : String(cause)
-          }`,
-          { cause },
-        )
-      }
+  for (const row of parsed) {
+    try {
+      rows.push(validateRow(row))
+    } catch (cause) {
+      throw new Error(
+        `row validation failed at ${ctx.sourceFile}:${row.source_line}: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+        { cause },
+      )
     }
   }
   return rows

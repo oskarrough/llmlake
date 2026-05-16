@@ -6,12 +6,12 @@ import { mkdir, realpath } from 'node:fs/promises'
 import { Schema } from 'effect'
 import {
   AGENTS,
+  buildCodexSessionIndex,
   colsSql,
-  newState,
-  parseLine,
+  makeParseContext,
+  parseSessionText,
   RowSchema,
   type Agent,
-  type ParseContext,
   type Row,
 } from './parse-session.ts'
 
@@ -48,19 +48,15 @@ const out =
     basename(src).replace(/\.jsonl$/, '.parquet'),
   )
 
-const ctx: ParseContext = { agent, sourceFile, state: newState() }
+const codexSessionIndex = await buildCodexSessionIndex(sessionsRoot)
+const ctx = makeParseContext(agent, sourceFile, sessionsRoot, codexSessionIndex)
 const rows: Row[] = []
-const lines = (await Bun.file(src).text()).split('\n')
-for (let i = 0; i < lines.length; i++) {
-  const line = lines[i]
-  if (!line) continue
-  for (const row of parseLine(line, i + 1, ctx)) {
-    try {
-      rows.push(validateRow(row))
-    } catch (cause) {
-      console.error(`row validation failed at ${ctx.sourceFile}:${i + 1}`)
-      throw cause
-    }
+for (const row of await parseSessionText(await Bun.file(src).text(), ctx)) {
+  try {
+    rows.push(validateRow(row))
+  } catch (cause) {
+    console.error(`row validation failed at ${ctx.sourceFile}:${row.source_line}`)
+    throw cause
   }
 }
 
