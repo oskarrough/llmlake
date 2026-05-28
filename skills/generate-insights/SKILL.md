@@ -117,7 +117,7 @@ Convert relative periods to absolute ISO timestamps before any query.
    - **Bugs / dead refs.** Typos, broken file references, commands that
      didn't work as written.
    - **One concrete edit.** If you could change exactly one file under
-     `insights/` or `.claude/skills/` to make the next run smoother, which
+     `insights/` or `skills/` to make the next run smoother, which
      file and what change?
 
 10. **Report back.** Print the path to the report and a one-line summary.

@@ -14,7 +14,11 @@ recent under `data/reports/`.
 
 ## Procedure
 
-1. **Re-run every saved query** via `./llmlake query`. Capture the rows.
+1. **Re-run every saved query** via `./llmlake query`. The shell only
+   accepts inline SQL via `-c` (there is no `-f`), so run each saved file
+   with `./llmlake query -c "$(cat queries/<id>.sql)"`. A saved file may
+   contain several statements (e.g. `notable-sessions.sql`); `-c` runs
+   them all and prints one result block per statement. Capture the rows.
 
 2. **For each `<section>` in the report:**
    - Extract every number, percentage, model name, tool name, session id,

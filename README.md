@@ -1,6 +1,6 @@
 # llmlake
 
-A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using the built-in AI skills.
+A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using installable agent skills.
 
 ```
   ~/.claude  ~/.codex  ~/.pi  ~/.hermes
@@ -18,7 +18,13 @@ A local tool that helps you learn from your (possibly many) LLM sessions across 
 
 ---
 
-Install [Duckdb](https://duckdb.org/install/) and `git clone git@github.com/oskarrough/llmlake`.
+Install [Duckdb](https://duckdb.org/install/) and `git clone https://github.com/oskarrough/llmlake`.
+
+Install the skills into any supported coding agent:
+
+```sh
+bunx skills add oskarrough/llmlake
+```
 
 Once inside the cloned repo, you can _collect_ sessions, _build_ them into .parquet files, _query_ the DB with SQL.
 
@@ -40,19 +46,17 @@ Query the parquet with duckdb (or ask your agent to do it)
 
 Bonus feature: two-way rsync between `data/sessions/` and a shared folder, so multiple devices share one library. For example, I use it to store my data in dropbox: `./llmlake sync ~/Dropbox/my-ai-sessions`.
 
-## Insights
+## Skills
 
-After `collect` and `build`, open an AI coder in this repo (Claude Code, Codex, ...) and run a skill:
+After `collect` and `build`, open any coding agent with skills support in this repo and run one of these:
 
-- `generate-insights` — an HTML report for a period (a week, a month, all time)
-- `inspect-session` — a deep-dive into one session
-- `explore-lake` — ask questions about the data and get answers
+- `llmlake:explore-lake` — ask questions about sessions, costs, tools, models, projects, or activity patterns.
+- `llmlake:generate-insights` — create an HTML report for a period, such as last week, last month, or all time.
+- `llmlake:inspect-session` — create a focused HTML deep-dive for one session id.
 
-## Files
+## File overview for contributors
 
-- `collect-claude` — copy from `~/.claude/projects/`
-- `collect-pi` — copy Pi sessions
-- `collect-codex` — copy from `~/.codex/sessions/`
-- `build` — parse every collected JSONL file into parquet under `agent=<x>/`
+- `collect-{claude,codex,hermes, pi}` — copy sessions
+- `build` — parse every collected JSONL file into parquet 
 - `build-one` — parse a single raw JSONL file into parquet
 - `query` — duckdb shell over `data/parquet/` with an `events` view

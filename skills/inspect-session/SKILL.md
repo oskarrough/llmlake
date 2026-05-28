@@ -8,9 +8,10 @@ HTML report. The whole report fits the same `insights/skeleton.html` used
 by period reports — section ids and SQL filenames must match for the
 verifier to work if invoked later.
 
-**Token budget: aim for <20k.** That means: 3 SQL queries, render once,
-no verifier pass, no retrospective. The user can invoke
-`llmlake:verify-insights` separately if they want a fact-check.
+**Token budget: aim for <20k.** That means: up to 4 SQL queries (summary
+and asks always; trace and errors only when the survey shows tool calls
+or errors), render once, no verifier pass, no retrospective. The user can
+invoke `llmlake:verify-insights` separately if they want a fact-check.
 
 ## Inputs
 
@@ -70,6 +71,20 @@ mkdir -p data/reports/${TS}-session-<sid8>/queries
      AND text IS NOT NULL
      AND trim(text) <> ''
    ORDER BY ts;
+   ```
+
+   **codex sessions** inject pseudo-prompts as `user_message` rows that
+   are not things the user typed. They are reliably identifiable: the text
+   starts with an XML-style tag (`<permissions instructions>`,
+   `<turn_aborted>`, `<environment_context>`, `<collaboration_mode>`,
+   `<user_instructions>`) or with `# AGENTS.md instructions for `. Genuine
+   prompts never start that way. If the survey shows `agent = 'codex'`,
+   filter them and record the filtered category in the meta line (below):
+
+   ```sql
+   -- append before ORDER BY for codex sessions
+     AND text NOT LIKE '<%'
+     AND text NOT LIKE '# AGENTS.md instructions for %'
    ```
 
 3. **Tool stats** (only if survey.tool_calls > 0). Save as `queries/trace.sql`, then run:
@@ -144,8 +159,10 @@ Fill `insights/skeleton.html`. Sections, in order:
      by dropping rows. Slash commands render the command line in
      `<code>`. **Sampling the list is forbidden** — "first 5 of 34 for
      readability" is a bug. The only allowed reason to omit rows is
-     filtering a clearly identifiable category (e.g. auto-injected
-     system pseudo-prompts in codex sessions); if you do that, add a
+     filtering a clearly identifiable category — in practice that means
+     the codex pseudo-prompts caught by the two `NOT LIKE` clauses in
+     `asks.sql` (tag-prefixed or `# AGENTS.md instructions for …`). Do not
+     invent other categories. If you filter, add a
      `<p class="meta">Showing N of M; omitted &lt;category&gt;.</p>`
      above the list naming the category.
 
@@ -214,6 +231,8 @@ verifier. Don't write run-notes.md.
 - Use timestamps as stored (timezone-aware). If you reference a time in
   prose, render it as `HH:MM <tz>` matching the stored value — don't
   invent a "UTC" claim from data stored in a different zone.
-- Use `./llmlake query`, never raw `duckdb`.
+- Use `./llmlake query`, never raw `duckdb`. The shell only accepts
+  inline SQL via `-c` (there is no `-f`); run a saved file with
+  `./llmlake query -c "$(cat queries/<id>.sql)"`.
 - All three queries are tight enough to run sequentially without
   parallelism overhead.
