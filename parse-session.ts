@@ -151,6 +151,8 @@ export type ParseContext = {
   codexSessionIndex?: ReadonlyMap<string, string>
   /** Populated during build pass 1; finalize uses it in pass 2 (claude only). */
   claudeCrossFile?: ClaudeCrossFileRegistry
+  /** Suppress per-line warnings (set on the claude cross-file pre-pass). */
+  quiet?: boolean
 }
 
 export function newState(): ParseState {
@@ -565,7 +567,12 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   try {
     ev = JSON.parse(line)
   } catch {
-    console.warn(`malformed line ${lineNo} in ${ctx.sourceFile}`)
+    if (!ctx.quiet) {
+      const kind = line.trimEnd().endsWith('}') ? 'malformed' : 'truncated'
+      console.warn(
+        `dropped ${kind} line ${lineNo} in ${ctx.sourceFile} (1 line skipped, rest of session built)`,
+      )
+    }
     return []
   }
   const msg = ev.message ?? {}
@@ -1073,6 +1080,7 @@ export async function parseSessionText(
   ctx: ParseContext,
   opts?: ParseSessionOptions,
 ): Promise<Row[]> {
+  if (opts?.registerClaudeCrossFile) ctx.quiet = true
   if (ctx.agent === 'codex') await preloadCodexForkInheritance(text, ctx)
   const rows: Row[] = []
   const lines = text.split('\n')
