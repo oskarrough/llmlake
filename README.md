@@ -1,18 +1,16 @@
 # llmlake
 
-A local tool for learning from LLM session logs across agents (Claude Code, Pi, Codex, ...).
+A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using the built-in AI skills.
 
 ---
 
-Git clone github.org/oskarrough/llmlake and install [Duckdb](https://duckdb.org/install/)
+Install [Duckdb](https://duckdb.org/install/) and `git clone git@github.com/oskarrough/llmlake`.
+
+Once inside the cloned repo, you can _collect_ sessions, _build_ them into .parquet files, _query_ the DB with SQL.
 
 `./llmlake collect`
 
 Moves all raw session files from your local computer into `./data/sessions`. The `data` folder is gitignored.
-
-`./llmlake sync <path>`
-
-Two-way rsync between `data/sessions/` and a shared folder, so multiple devices share one library.
 
 `./llmlake build`
 
@@ -22,9 +20,19 @@ Transforms them into parquet files inside `data/parquet`.
 ./llmlake query -c "SELECT session_id, count(*) FROM events WHERE agent='pi' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
 ```
 
-Query the parquet with duckdb.
+Query the parquet with duckdb (or ask your agent to do it)
 
-Open a Codex (or similar) session in this folder and ask it to explore the data for you.
+`./llmlake sync <path>`
+
+Bonus feature: two-way rsync between `data/sessions/` and a shared folder, so multiple devices share one library. For example, I use it to store my data in dropbox: `./llmlake sync ~/Dropbox/my-ai-sessions`.
+
+## Insights
+
+After `collect` and `build`, open an AI coder in this repo (Claude Code, Codex, ...) and run a skill:
+
+- `generate-insights` — an HTML report for a period (a week, a month, all time)
+- `inspect-session` — a deep-dive into one session
+- `explore-lake` — ask questions about the data and get answers
 
 ## Files
 
