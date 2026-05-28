@@ -2,6 +2,20 @@
 
 A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using the built-in AI skills.
 
+```
+  ~/.claude  ~/.codex  ~/.pi  ~/.hermes
+      └──────────┴──┬───┴─────────┘
+                    ▼
+                 collect → data/sessions (↔ optional rsync)
+                    │
+                    ▼
+                 build → data/parquet
+                    │
+         ┌──────────┴──────────┐
+       query               ai skills
+       (SQL)            (HTML insights)
+```
+
 ---
 
 Install [Duckdb](https://duckdb.org/install/) and `git clone git@github.com/oskarrough/llmlake`.
