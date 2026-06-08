@@ -127,6 +127,8 @@ const concurrency =
 let built = 0
 let skipped = 0
 let errors = 0
+let unknown = 0
+const unknownDirs = new Set<string>()
 let cursor = 0
 
 async function workerLoop(id: number) {
@@ -141,7 +143,11 @@ async function workerLoop(id: number) {
         const rel = relative(root, src)
         const agent = rel.split(/[\\/]/)[0] as Agent
         if (!AGENTS.includes(agent)) {
-          errors++
+          // Not a parse failure — a file under an unrecognized top-level dir
+          // (e.g. a stray `sessions/` folder from a misconfigured sync). Track
+          // these separately so they can't masquerade as parse errors.
+          unknownDirs.add(agent)
+          unknown++
           continue
         }
         const out = outPathFor(agent, src)
@@ -167,7 +173,17 @@ async function workerLoop(id: number) {
 
 await Promise.all(Array.from({ length: concurrency }, (_, i) => workerLoop(i)))
 
+if (unknown) {
+  console.warn(
+    `warning: ignored ${unknown} files under unrecognized top-level dir(s): ${
+      [...unknownDirs].join(', ')
+    } — expected one of ${AGENTS.join(', ')}`,
+  )
+}
+
 console.log(
-  `built ${built}, skipped ${skipped}${errors ? `, errors ${errors}` : ''} (of ${files.length})`,
+  `built ${built}, skipped ${skipped}${errors ? `, errors ${errors}` : ''}${
+    unknown ? `, ignored ${unknown}` : ''
+  } (of ${files.length})`,
 )
 if (errors) process.exit(1)
