@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "check": "oxfmt --write && oxlint --fix",
-    "typecheck": "oxlint --type-aware --type-check"
+    "typecheck": "oxlint --type-aware --type-check",
+    "test": "bun test"
   },
   "dependencies": {
     "effect": "^3.21.2"

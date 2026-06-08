@@ -22,6 +22,9 @@ const INT = Schema.NullOr(Schema.Number).pipe(duckdb('BIGINT'))
 const DBL = Schema.NullOr(Schema.Number).pipe(duckdb('DOUBLE'))
 const BOOL = Schema.NullOr(Schema.Boolean).pipe(duckdb('BOOLEAN'))
 const JSON_ = Schema.Unknown.pipe(duckdb('JSON'))
+const STR_REQ = Schema.String.pipe(duckdb('VARCHAR'))
+const INT_REQ = Schema.Number.pipe(duckdb('BIGINT'))
+const BOOL_REQ = Schema.Boolean.pipe(duckdb('BOOLEAN'))
 
 export const AGENTS = ['claude', 'pi', 'codex', 'hermes'] as const
 const AgentSchema = Schema.Literal(...AGENTS).pipe(duckdb('VARCHAR'))
@@ -42,7 +45,7 @@ const EventTypeSchema = Schema.Literal(...EVENT_TYPES).pipe(duckdb('VARCHAR'))
 export type EventType = (typeof EVENT_TYPES)[number]
 
 export const RowSchema = Schema.Struct({
-  row_id: Schema.String.pipe(duckdb('VARCHAR')),
+  row_id: STR_REQ,
   ts: Schema.NullOr(Schema.String).pipe(duckdb('TIMESTAMPTZ')),
   agent: AgentSchema,
   session_id: STR,
@@ -66,9 +69,9 @@ export const RowSchema = Schema.Struct({
   is_error: BOOL,
   stop_reason: STR,
   cwd: STR,
-  is_subagent: Schema.Boolean.pipe(duckdb('BOOLEAN')),
-  source_file: Schema.String.pipe(duckdb('VARCHAR')),
-  source_line: Schema.Number.pipe(duckdb('BIGINT')),
+  is_subagent: BOOL_REQ,
+  source_file: STR_REQ,
+  source_line: INT_REQ,
   raw: JSON_,
 })
 
@@ -99,6 +102,45 @@ export const colsSql = Object.entries(COLUMNS)
   .join(', ')
 
 type CodexTotals = { input: number; cached: number; output: number }
+
+const CODEX_ZERO: CodexTotals = { input: 0, cached: 0, output: 0 }
+
+const mapTotals = (
+  a: CodexTotals,
+  b: CodexTotals,
+  f: (x: number, y: number) => number,
+): CodexTotals => ({
+  input: f(a.input, b.input),
+  cached: f(a.cached, b.cached),
+  output: f(a.output, b.output),
+})
+
+const addTotals = (a: CodexTotals, b: CodexTotals) => mapTotals(a, b, (x, y) => x + y)
+// Component-wise max(0, a - b).
+const subTotals = (a: CodexTotals, b: CodexTotals) => mapTotals(a, b, (x, y) => Math.max(0, x - y))
+const totalsEqual = (a: CodexTotals, b: CodexTotals) =>
+  a.input === b.input && a.cached === b.cached && a.output === b.output
+const isZero = (t: CodexTotals) => t.input === 0 && t.cached === 0 && t.output === 0
+
+// Mutable cursor carried across a codex file's token_count events (and rebuilt
+// standalone when reading a fork parent). Lives on ParseState as `codexWalk`.
+type CodexTokenWalk = {
+  previousTotals: CodexTotals | null
+  rawTotalsBaseline: CodexTotals | null
+  sawDivergentTotals: boolean
+  remainingInherited: CodexTotals | null
+  inheritedTotals: CodexTotals | null
+}
+
+function newCodexWalk(): CodexTokenWalk {
+  return {
+    previousTotals: null,
+    rawTotalsBaseline: null,
+    sawDivergentTotals: false,
+    remainingInherited: null,
+    inheritedTotals: null,
+  }
+}
 
 type ClaudeKeyedUsage = {
   lineNo: number
@@ -134,11 +176,7 @@ export type ParseState = {
   seenEventIds: Set<string>
   // Streaming assistant chunks share message.id + requestId; keep last per file.
   claudeKeyedUsage: Map<string, ClaudeKeyedUsage>
-  codexPreviousTotals: CodexTotals | null
-  codexRawTotalsBaseline: CodexTotals | null
-  codexSawDivergentTotals: boolean
-  codexRemainingInherited: CodexTotals | null
-  codexInheritedTotals: CodexTotals | null
+  codexWalk: CodexTokenWalk
 }
 
 export type ParseContext = {
@@ -166,11 +204,7 @@ export function newState(): ParseState {
     subagent_suffix: null,
     seenEventIds: new Set(),
     claudeKeyedUsage: new Map(),
-    codexPreviousTotals: null,
-    codexRawTotalsBaseline: null,
-    codexSawDivergentTotals: false,
-    codexRemainingInherited: null,
-    codexInheritedTotals: null,
+    codexWalk: newCodexWalk(),
   }
 }
 
@@ -190,23 +224,6 @@ function codexTotalsFromUsage(obj: Record<string, unknown> | undefined): CodexTo
   }
 }
 
-function codexAddTotals(a: CodexTotals, b: CodexTotals): CodexTotals {
-  return { input: a.input + b.input, cached: a.cached + b.cached, output: a.output + b.output }
-}
-
-function codexTotalsEqual(a: CodexTotals, b: CodexTotals): boolean {
-  return a.input === b.input && a.cached === b.cached && a.output === b.output
-}
-
-function codexTotalDelta(from: CodexTotals | null, to: CodexTotals): CodexTotals {
-  const base = from ?? { input: 0, cached: 0, output: 0 }
-  return {
-    input: Math.max(0, to.input - base.input),
-    cached: Math.max(0, to.cached - base.cached),
-    output: Math.max(0, to.output - base.output),
-  }
-}
-
 function codexDivergentTotalDelta(
   rawBaseline: CodexTotals | null,
   countedBaseline: CodexTotals | null,
@@ -223,34 +240,6 @@ function codexDivergentTotalDelta(
   }
 }
 
-const CODEX_ZERO: CodexTotals = { input: 0, cached: 0, output: 0 }
-
-type CodexTokenWalk = {
-  previousTotals: CodexTotals | null
-  rawTotalsBaseline: CodexTotals | null
-  sawDivergentTotals: boolean
-  remainingInherited: CodexTotals | null
-  inheritedTotals: CodexTotals | null
-}
-
-function codexTokenWalkFromState(state: ParseState): CodexTokenWalk {
-  return {
-    previousTotals: state.codexPreviousTotals,
-    rawTotalsBaseline: state.codexRawTotalsBaseline,
-    sawDivergentTotals: state.codexSawDivergentTotals,
-    remainingInherited: state.codexRemainingInherited,
-    inheritedTotals: state.codexInheritedTotals,
-  }
-}
-
-function applyCodexTokenWalkToState(state: ParseState, walk: CodexTokenWalk): void {
-  state.codexPreviousTotals = walk.previousTotals
-  state.codexRawTotalsBaseline = walk.rawTotalsBaseline
-  state.codexSawDivergentTotals = walk.sawDivergentTotals
-  state.codexRemainingInherited = walk.remainingInherited
-  state.codexInheritedTotals = walk.inheritedTotals
-}
-
 /** Apply one token_count info block; mutates walk and returns delta + cumulative counted totals. */
 function advanceCodexTokenCount(
   info: Record<string, unknown>,
@@ -263,31 +252,17 @@ function advanceCodexTokenCount(
     const rawDelta = codexTotalsFromUsage(last)
     let delta = rawDelta
     if (walk.remainingInherited) {
-      const remaining = walk.remainingInherited
-      delta = {
-        input: Math.max(0, rawDelta.input - remaining.input),
-        cached: Math.max(0, rawDelta.cached - remaining.cached),
-        output: Math.max(0, rawDelta.output - remaining.output),
-      }
-      const nextRemaining = {
-        input: Math.max(0, remaining.input - rawDelta.input),
-        cached: Math.max(0, remaining.cached - rawDelta.cached),
-        output: Math.max(0, remaining.output - rawDelta.output),
-      }
-      walk.remainingInherited =
-        nextRemaining.input === 0 && nextRemaining.cached === 0 && nextRemaining.output === 0
-          ? null
-          : nextRemaining
+      delta = subTotals(rawDelta, walk.remainingInherited)
+      const nextRemaining = subTotals(walk.remainingInherited, rawDelta)
+      walk.remainingInherited = isZero(nextRemaining) ? null : nextRemaining
     }
-    const prev = walk.previousTotals ?? CODEX_ZERO
-    const countedTotals = codexAddTotals(prev, delta)
+    const countedTotals = addTotals(walk.previousTotals ?? CODEX_ZERO, delta)
     walk.previousTotals = countedTotals
-
     if (total) {
       let rawTotals = codexTotalsFromUsage(total)
-      if (walk.inheritedTotals) rawTotals = codexSubtractInherited(rawTotals, walk.inheritedTotals)
+      if (walk.inheritedTotals) rawTotals = subTotals(rawTotals, walk.inheritedTotals)
       walk.rawTotalsBaseline = rawTotals
-      if (!codexTotalsEqual(rawTotals, countedTotals)) walk.sawDivergentTotals = true
+      if (!totalsEqual(rawTotals, countedTotals)) walk.sawDivergentTotals = true
     } else {
       walk.rawTotalsBaseline = countedTotals
     }
@@ -296,28 +271,19 @@ function advanceCodexTokenCount(
 
   if (total) {
     let rawTotals = codexTotalsFromUsage(total)
-    if (walk.inheritedTotals) rawTotals = codexSubtractInherited(rawTotals, walk.inheritedTotals)
+    if (walk.inheritedTotals) rawTotals = subTotals(rawTotals, walk.inheritedTotals)
     const delta = walk.sawDivergentTotals
       ? codexDivergentTotalDelta(walk.rawTotalsBaseline, walk.previousTotals, rawTotals)
-      : codexTotalDelta(walk.rawTotalsBaseline, rawTotals)
-    const prev = walk.previousTotals ?? CODEX_ZERO
-    const countedTotals = codexAddTotals(prev, delta)
+      : subTotals(rawTotals, walk.rawTotalsBaseline ?? CODEX_ZERO)
+    const countedTotals = addTotals(walk.previousTotals ?? CODEX_ZERO, delta)
     walk.previousTotals = countedTotals
     walk.rawTotalsBaseline = rawTotals
-    if (!codexTotalsEqual(rawTotals, countedTotals)) walk.sawDivergentTotals = true
+    if (!totalsEqual(rawTotals, countedTotals)) walk.sawDivergentTotals = true
     walk.remainingInherited = null
     return { delta, countedTotals }
   }
 
   return null
-}
-
-function codexSubtractInherited(raw: CodexTotals, inherited: CodexTotals): CodexTotals {
-  return {
-    input: Math.max(0, raw.input - inherited.input),
-    cached: Math.max(0, raw.cached - inherited.cached),
-    output: Math.max(0, raw.output - inherited.output),
-  }
 }
 
 function parseCodexSessionIdFromFile(path: string): string | null {
@@ -361,13 +327,7 @@ async function codexInheritedTotalsAtFork(
   forkTimestamp: string,
 ): Promise<CodexTotals | null> {
   const text = await Bun.file(parentSourceFile).text()
-  const walk: CodexTokenWalk = {
-    previousTotals: null,
-    rawTotalsBaseline: null,
-    sawDivergentTotals: false,
-    remainingInherited: null,
-    inheritedTotals: null,
-  }
+  const walk = newCodexWalk()
   const snapshots: { timestamp: string; totals: CodexTotals }[] = []
   for (const line of text.split('\n')) {
     if (!line) continue
@@ -408,8 +368,8 @@ async function preloadCodexForkInheritance(text: string, ctx: ParseContext): Pro
     if (!parentRel) return
     const inherited = await codexInheritedTotalsAtFork(join(ctx.sessionsRoot, parentRel), forkTs)
     if (!inherited) return
-    ctx.state.codexInheritedTotals = inherited
-    ctx.state.codexRemainingInherited = { ...inherited }
+    ctx.state.codexWalk.inheritedTotals = inherited
+    ctx.state.codexWalk.remainingInherited = { ...inherited }
     return
   }
 }
@@ -460,10 +420,7 @@ function finalizeClaudeUsage(rows: Row[], state: ParseState, ctx: ParseContext):
   for (const [usageKey, entry] of state.claudeKeyedUsage) {
     const canon = claudeCanonicalUsageKey(state.session_id, usageKey)
     const winner = canon && ctx.claudeCrossFile ? ctx.claudeCrossFile.winners.get(canon) : null
-    if (
-      winner &&
-      (winner.sourceFile !== ctx.sourceFile || winner.lineNo !== entry.lineNo)
-    ) {
+    if (winner && (winner.sourceFile !== ctx.sourceFile || winner.lineNo !== entry.lineNo)) {
       continue
     }
     const onLine = rows.filter((r) => r.source_line === entry.lineNo)
@@ -879,9 +836,7 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
       if (model) state.model = model
       row.model = model
 
-      const walk = codexTokenWalkFromState(state)
-      const tokenResult = advanceCodexTokenCount(info, walk)
-      applyCodexTokenWalkToState(state, walk)
+      const tokenResult = advanceCodexTokenCount(info, state.codexWalk)
       if (!tokenResult) return null
       const { delta } = tokenResult
       if (delta.input === 0 && delta.cached === 0 && delta.output === 0) return null
@@ -1065,9 +1020,14 @@ export function makeParseContext(
   codexSessionIndex: ReadonlyMap<string, string>,
   claudeCrossFile?: ClaudeCrossFileRegistry,
 ): ParseContext {
-  return claudeCrossFile
-    ? { agent, sourceFile, state: newState(), sessionsRoot, codexSessionIndex, claudeCrossFile }
-    : { agent, sourceFile, state: newState(), sessionsRoot, codexSessionIndex }
+  return {
+    agent,
+    sourceFile,
+    state: newState(),
+    sessionsRoot,
+    codexSessionIndex,
+    ...(claudeCrossFile ? { claudeCrossFile } : {}),
+  }
 }
 
 export type ParseSessionOptions = {

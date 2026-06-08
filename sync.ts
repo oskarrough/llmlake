@@ -15,11 +15,27 @@ if (!arg) {
 const dest = arg.replace(/^~(?=$|\/)/, homedir())
 const src = join(import.meta.dir, 'data/sessions')
 
-// rsync exit 24 = "some source files vanished before transfer" — benign, and
-// common when syncing a live Dropbox folder that reshuffles files underneath us.
+// Some rsync exit codes are benign for a live Dropbox folder and must NOT abort
+// the sync — especially the pull direction, where reading a cloud file forces
+// Dropbox to download it:
+//   24 = a source file vanished mid-transfer (Dropbox reshuffled underneath us)
+//   23 = partial transfer — rsync copied everything it could and flagged the rest
+//   30 = timeout — an mmap read of an online-only placeholder timed out hydrating
+// In every case rsync still transferred every file it could read; only the
+// not-yet-hydrated stragglers are skipped, and the next run picks them up once
+// Dropbox has materialized them in the background. We warn instead of throwing.
+//
+// One pass only — no retry loop. Retrying re-walks the whole tree and re-triggers
+// hydration of hundreds of online-only files, which pegs Dropbox and the machine.
+const BENIGN = new Set([23, 24, 30])
+
 async function rsync(from: string, to: string) {
   const { exitCode, stderr } = await $`rsync -a ${from}/ ${to}/`.nothrow().quiet()
-  if (exitCode !== 0 && exitCode !== 24) throw new Error(stderr.toString())
+  if (exitCode === 0) return
+  if (!BENIGN.has(exitCode)) throw new Error(stderr.toString())
+  console.warn(
+    `warning: rsync ${from} → ${to} skipped some files (Dropbox not yet downloaded); next run picks them up`,
+  )
 }
 
 await $`mkdir -p ${dest}`
