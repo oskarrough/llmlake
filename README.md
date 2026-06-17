@@ -38,20 +38,24 @@ Transforms them into parquet files inside `data/parquet`.
 
 `./llmlake status`
 
-Pops an instant terminal dashboard — cost, daily activity, top projects,
-models, task mix and tools — straight from the lake, no AI or SQL needed.
-Scope it with flags:
+Pops an instant terminal dashboard — straight from the lake, no AI or SQL
+needed. It leads with **What to improve**: actionable findings about your
+agent sessions (editing more than reading, tools that error a lot, re-read
+waste, low cache hits), each with a concrete fix — then the usual cost,
+activity, model, task-mix, tool-reliability and per-agent breakdowns.
 
 ```sh
 ./llmlake status                         # last 7 days, all agents
 ./llmlake status --period 30d            # 30d | today | month | all
 ./llmlake status --agent claude --cwd llmlake
+./llmlake status insights                # just the findings
+./llmlake status compare                 # cross-agent comparison
 ```
 
 It's built in three flexible layers — a `scoped` view (the period/agent/cwd
 filter), self-describing question files in `queries/`, and `views` that
-compose questions into panels — so adding a metric is a new `.sql`, and
-trying a new layout is a few lines in `status.ts`.
+compose questions into panels — so adding a finding or metric is a new
+`.sql`, and trying a new layout is a few lines in `status.ts`.
 
 ```sh
 ./llmlake query -c "SELECT session_id, count(*) FROM events WHERE agent='pi' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
