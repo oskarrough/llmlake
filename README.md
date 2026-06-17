@@ -52,10 +52,9 @@ activity, model, task-mix, tool-reliability and per-agent breakdowns.
 ./llmlake status compare                 # cross-agent comparison
 ```
 
-It's built in three flexible layers — a `scoped` view (the period/agent/cwd
-filter), self-describing question files in `queries/`, and `views` that
-compose questions into panels — so adding a finding or metric is a new
-`.sql`, and trying a new layout is a few lines in `status.ts`.
+Under the hood it's just SQL: each panel is a question file in `queries/`,
+and a `view` lists which questions to show. So a new metric is a new `.sql`
+file, and the layout lives in `status.ts`.
 
 ```sh
 ./llmlake query -c "SELECT session_id, count(*) FROM events WHERE agent='pi' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
