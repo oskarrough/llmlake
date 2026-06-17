@@ -36,6 +36,23 @@ Moves all raw session files from your local computer into `./data/sessions`. The
 
 Transforms them into parquet files inside `data/parquet`.
 
+`./llmlake status`
+
+Pops an instant terminal dashboard — cost, daily activity, top projects,
+models, task mix and tools — straight from the lake, no AI or SQL needed.
+Scope it with flags:
+
+```sh
+./llmlake status                         # last 7 days, all agents
+./llmlake status --period 30d            # 30d | today | month | all
+./llmlake status --agent claude --cwd llmlake
+```
+
+It's built in three flexible layers — a `scoped` view (the period/agent/cwd
+filter), self-describing question files in `queries/`, and `views` that
+compose questions into panels — so adding a metric is a new `.sql`, and
+trying a new layout is a few lines in `status.ts`.
+
 ```sh
 ./llmlake query -c "SELECT session_id, count(*) FROM events WHERE agent='pi' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;"
 ```
@@ -57,6 +74,8 @@ After `collect` and `build`, open any coding agent with skills support in this r
 ## File overview for contributors
 
 - `collect-{claude,codex,hermes, pi}` — copy sessions
-- `build` — parse every collected JSONL file into parquet 
+- `build` — parse every collected JSONL file into parquet
 - `build-one` — parse a single raw JSONL file into parquet
-- `query` — duckdb shell over `data/parquet/` with an `events` view
+- `query` — duckdb shell over `data/parquet/` with `events` + `scoped` views
+- `status` — terminal dashboard; composes question files in `queries/` into views
+- `queries/*.sql` — self-describing questions (read `FROM scoped`), shared by `status`, `query`, and the skills

@@ -9,12 +9,15 @@ Commands:
   collect  Copy local LLM session logs into ./data/sessions
   sync     Two-way merge ./data/sessions with a shared library folder
   build    Transform collected sessions into parquet files in ./data/parquet
+  status   Instant terminal dashboard over the lake (no AI needed)
   query    Query the parquet data with duckdb
 
 Examples:
   ./llmlake collect
   ./llmlake sync ~/Dropbox/Apps/llmlake/sessions
   ./llmlake build
+  ./llmlake status
+  ./llmlake status --period 30d --agent claude
   ./llmlake query -c "SELECT count(*) FROM events;"
 EOF
   exit 0

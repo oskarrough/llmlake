@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB="$ROOT/data/llmlake.duckdb"
 PARQUET="$ROOT/data/parquet/**/*.parquet"
-INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true);"
+# `scoped` mirrors the period/agent/cwd-filtered view that `./llmlake status`
+# builds, but unfiltered here. Question files in queries/ read FROM scoped so
+# the same SQL works in both the dashboard and this shell.
+INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true); CREATE OR REPLACE VIEW scoped AS SELECT * FROM events;"
 
 # Warn (to stderr) if collected sessions are newer than the built parquet, so a
 # stale snapshot doesn't silently look like the latest data.
