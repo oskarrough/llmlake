@@ -30,7 +30,7 @@ LIMIT 5;
 
 **Before anything else**, create the report directory and its `queries/`
 subfolder. Every saved SQL goes there. Order is fixed: save the .sql,
-*then* run it, *then* keep going.
+_then_ run it, _then_ keep going.
 
 ```bash
 TS=$(date -u +%Y-%m-%d-%H%M)
@@ -141,7 +141,6 @@ Fill `insights/skeleton.html`. Sections, in order:
 - `{{period_start_*}}` = session start, `{{period_end_*}}` = session end
 - `{{scope_summary}}` = e.g. `claude-opus-4-7 in ~/Sites/llmlake`
 - `{{modules}}`, in order:
-
   1. **`<section id="summary">`** — `<h2>Summary</h2>`, one `<p class="lede">`
      naming the most striking attribute (or "Routine session, completed
      cleanly" if not), then a `<dl>` with: started, ended, duration
@@ -181,7 +180,7 @@ Fill `insights/skeleton.html`. Sections, in order:
      with ≥3 calls. `<table>` of tool / calls / errors / error_pct,
      sorted by calls desc, top 10.
 
-  5. **`<section id="takeaway">`** — `<h2>` with a *specific* heading
+  5. **`<section id="takeaway">`** — `<h2>` with a _specific_ heading
      naming the arc ("Stuck in a Bash retry loop", "Refactored the
      parquet writer", etc. — never "Takeaway" or "What happened").
      Then one `<p class="lede">` stating the arc in one sentence,

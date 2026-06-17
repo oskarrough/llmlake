@@ -175,9 +175,9 @@ await Promise.all(Array.from({ length: concurrency }, (_, i) => workerLoop(i)))
 
 if (unknown) {
   console.warn(
-    `warning: ignored ${unknown} files under unrecognized top-level dir(s): ${
-      [...unknownDirs].join(', ')
-    } — expected one of ${AGENTS.join(', ')}`,
+    `warning: ignored ${unknown} files under unrecognized top-level dir(s): ${[...unknownDirs].join(
+      ', ',
+    )} — expected one of ${AGENTS.join(', ')}`,
   )
 }
 

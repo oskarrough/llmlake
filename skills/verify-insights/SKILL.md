@@ -27,7 +27,7 @@ recent under `data/reports/`.
      Confirm each claimed value appears in the re-run rows. If a value
      does not appear, that's a **flag**.
    - Check that the lede sentence is supported by the query rows — not
-     just numerically, but the *qualitative* claim too. E.g. if the lede
+     just numerically, but the _qualitative_ claim too. E.g. if the lede
      says "errors concentrated in `Bash`", confirm `Bash` actually has the
      highest absolute error count among tools with enough calls to
      compare.
@@ -39,7 +39,7 @@ recent under `data/reports/`.
 
 4. **Cross-checks worth running:**
 
-   *Period reports* (the report has `at-a-glance` / `cost-breakdown` /
+   _Period reports_ (the report has `at-a-glance` / `cost-breakdown` /
    `notable-sessions` sections):
    - Sum of per-row costs in `cost-breakdown` matches the total in
      `at-a-glance` within rounding (±$0.01).
@@ -48,7 +48,7 @@ recent under `data/reports/`.
    - `notable-sessions` rows actually exist in the lake (re-query by
      `session_id`).
 
-   *Session reports* (the report has a `summary` section and a single
+   _Session reports_ (the report has a `summary` section and a single
    `session_id` scope):
    - Counts in `summary` (events, user_msgs, tool_calls, errors) match
      re-running its query for the same `session_id`.

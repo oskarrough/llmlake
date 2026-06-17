@@ -33,7 +33,9 @@ test('lowercases a mixed-case encoded dir without losing files', async () => {
   expect(dirs).toEqual(['-users-oskar-sites-llmlake'])
   const files = (await readdir(join(root, 'claude/-users-oskar-sites-llmlake'))).sort()
   expect(files).toEqual(['a.jsonl', 'b.jsonl'])
-  expect(await readFile(join(root, 'claude/-users-oskar-sites-llmlake/a.jsonl'), 'utf8')).toBe('hello')
+  expect(await readFile(join(root, 'claude/-users-oskar-sites-llmlake/a.jsonl'), 'utf8')).toBe(
+    'hello',
+  )
   expect(stats.renamed).toBeGreaterThan(0)
   expect(stats.removed).toBe(0)
 })
@@ -49,7 +51,9 @@ test('merges a case-conflict fork, keeping the larger file', async () => {
 
   const dirs = await readdir(join(root, 'claude'))
   expect(dirs).toEqual(['-users-oskar-sites-arbe'])
-  expect(await readFile(join(root, 'claude/-users-oskar-sites-arbe/s.jsonl'), 'utf8')).toBe('much-longer-content')
+  expect(await readFile(join(root, 'claude/-users-oskar-sites-arbe/s.jsonl'), 'utf8')).toBe(
+    'much-longer-content',
+  )
 })
 
 test('is idempotent on an already-canonical tree', async () => {

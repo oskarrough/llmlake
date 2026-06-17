@@ -95,7 +95,6 @@ Convert relative periods to absolute ISO timestamps before any query.
    stabilizes. Be specific and terse: quote the exact line of a SKILL.md
    or module spec when it caused friction. No general praise, no rewrites.
    Cover what applies, skip the rest. Under ~400 words.
-
    - **Ambiguous instructions.** Where in `generate-insights/SKILL.md` or a
      module spec did you have to guess? Quote the line and say what you did.
    - **Render specs.** Which module's "Render" section under-specified (you

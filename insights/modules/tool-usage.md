@@ -38,8 +38,8 @@ ORDER BY 1, calls DESC;
 ## Render
 
 - `<p class="lede">` calling out the top tool by volume and any tool with
-  >10% error rate and >10 calls. If none, skip the error sentence — don't
-  pad.
+  > 10% error rate and >10 calls. If none, skip the error sentence — don't
+  > pad.
 - A `<table>` showing top 10 tools by calls.
 
 ## Rules

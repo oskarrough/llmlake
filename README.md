@@ -57,6 +57,6 @@ After `collect` and `build`, open any coding agent with skills support in this r
 ## File overview for contributors
 
 - `collect-{claude,codex,hermes, pi}` — copy sessions
-- `build` — parse every collected JSONL file into parquet 
+- `build` — parse every collected JSONL file into parquet
 - `build-one` — parse a single raw JSONL file into parquet
 - `query` — duckdb shell over `data/parquet/` with an `events` view
