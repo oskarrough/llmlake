@@ -16,7 +16,6 @@ Examples:
   ./llmlake collect
   ./llmlake sync ~/Dropbox/Apps/llmlake/sessions
   ./llmlake build
-  ./llmlake status
   ./llmlake status --period 30d --agent claude
   ./llmlake query -c "SELECT count(*) FROM events;"
 EOF
