@@ -26,7 +26,7 @@ const STR_REQ = Schema.String.pipe(duckdb('VARCHAR'))
 const INT_REQ = Schema.Number.pipe(duckdb('BIGINT'))
 const BOOL_REQ = Schema.Boolean.pipe(duckdb('BOOLEAN'))
 
-export const AGENTS = ['claude', 'pi', 'codex', 'hermes'] as const
+export const AGENTS = ['claude', 'pi', 'codex', 'hermes', 'cursor'] as const
 const AgentSchema = Schema.Literal(...AGENTS).pipe(duckdb('VARCHAR'))
 export type Agent = (typeof AGENTS)[number]
 
@@ -1006,11 +1006,83 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
   return [row]
 }
 
+// Cursor lines are pre-normalized by collect-cursor.ts (it reads Cursor's
+// SQLite state.vscdb and emits one slim, role-tagged JSON object per line), so
+// this parser stays a thin role mapper. One `session_meta` line then one line
+// per chat bubble in conversation order: user/assistant text, `isThought`
+// reasoning, or a `tool` (toolFormerData) which fans out to tool_call +
+// tool_result. Timestamps are synthesized by the collector (Cursor bubbles
+// carry none) by interpolating between the composer's createdAt/lastUpdatedAt.
+function parseCursor(line: string, lineNo: number, ctx: ParseContext): Row[] {
+  const { state } = ctx
+  const ev = JSON.parse(line)
+
+  if (ev.role === 'session_meta') {
+    state.session_id = ev.composerId ?? null
+    state.cwd = ev.cwd ?? null
+    state.model = ev.model ?? null
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = ev.ts ?? null
+    row.event_id = ev.composerId ?? null
+    row.event_type = 'session_meta'
+    row.text = ev.name ?? null
+    return [row]
+  }
+
+  if (ev.model) state.model = ev.model
+
+  if (ev.role === 'user') {
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = ev.ts ?? null
+    row.event_id = ev.bubbleId ?? null
+    row.event_type = 'user_message'
+    row.role = 'user'
+    row.text = ev.text ?? null
+    return [row]
+  }
+
+  // assistant lines: tool call, reasoning, or plain message
+  const tool = ev.tool
+  if (tool) {
+    const call = baseRow(ev, lineNo, ctx)
+    call.ts = ev.ts ?? null
+    call.event_id = tool.callId ?? ev.bubbleId ?? null
+    call.event_type = 'tool_call'
+    call.role = 'assistant'
+    call.tool_name = tool.name ?? null
+    call.tool_call_id = tool.callId ?? null
+    call.tool_input = maybeJson(tool.args ?? null)
+    if (tool.result == null) return [call]
+    const result = baseRow(ev, lineNo, ctx)
+    result.ts = ev.ts ?? null
+    result.event_id = tool.callId ? `${tool.callId}:result` : null
+    result.parent_id = tool.callId ?? null
+    result.event_type = 'tool_result'
+    result.role = 'tool'
+    result.tool_name = tool.name ?? null
+    result.tool_call_id = tool.callId ?? null
+    result.tool_output = maybeJson(tool.result)
+    result.is_error = tool.isError === true
+    return [call, result]
+  }
+
+  const row = baseRow(ev, lineNo, ctx)
+  row.ts = ev.ts ?? null
+  row.event_id = ev.bubbleId ?? null
+  row.event_type = ev.isThought ? 'reasoning' : 'assistant_message'
+  row.role = 'assistant'
+  row.text = ev.text ?? null
+  row.input_tokens = ev.inputTokens ?? null
+  row.output_tokens = ev.outputTokens ?? null
+  return [row]
+}
+
 const PARSERS: Record<Agent, (l: string, n: number, c: ParseContext) => Row | Row[] | null> = {
   claude: parseClaude,
   pi: parsePi,
   codex: parseCodex,
   hermes: parseHermes,
+  cursor: parseCursor,
 }
 
 export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row[] {

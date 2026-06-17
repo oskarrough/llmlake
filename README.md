@@ -1,10 +1,10 @@
 # llmlake
 
-A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using installable agent skills.
+A local tool that helps you learn from your (possibly many) LLM sessions across agents (Claude Code, Pi, Codex, Hermes, Cursor): it transforms the raw session files into denormalized .parquet files you can query with DuckDB and turn into (HTML) insights using installable agent skills.
 
 ```
-  ~/.claude  ~/.codex  ~/.pi  ~/.hermes
-      └──────────┴──┬───┴─────────┘
+  ~/.claude  ~/.codex  ~/.pi  ~/.hermes  Cursor (state.vscdb)
+      └──────────┴──┬───┴─────────┴───────────┘
                     ▼
                  collect → data/sessions (↔ optional rsync)
                     │

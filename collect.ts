@@ -5,7 +5,13 @@ import { $ } from 'bun'
 import { join } from 'node:path'
 import { normalizeSessionTree } from './lib/normalize-sessions.ts'
 
-const scripts = ['collect-claude.ts', 'collect-pi.ts', 'collect-codex.ts', 'collect-hermes.ts']
+const scripts = [
+  'collect-claude.ts',
+  'collect-pi.ts',
+  'collect-codex.ts',
+  'collect-hermes.ts',
+  'collect-cursor.ts',
+]
 await Promise.all(scripts.map((s) => $`bun run ${join(import.meta.dir, s)}`))
 
 const root = join(import.meta.dir, 'data/sessions')
