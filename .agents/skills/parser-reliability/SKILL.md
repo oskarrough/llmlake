@@ -1,5 +1,5 @@
 ---
-name: llmlake:parser-reliability
+name: parser-reliability
 description: Use when editing parse-session.ts, adding an agent parser, or when query numbers look off. Guards against silent parser bugs that quietly distort every downstream query.
 ---
 

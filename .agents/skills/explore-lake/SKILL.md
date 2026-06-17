@@ -1,5 +1,5 @@
 ---
-name: llmlake:explore-lake
+name: explore-lake
 description: Use when the user asks questions about their agent activity, sessions, tool use, costs, or anything answerable from the parquet lake. Turns the folder into an interactive analytics workspace.
 ---
 
