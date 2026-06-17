@@ -7,15 +7,8 @@ PARQUET="$ROOT/data/parquet/**/*.parquet"
 # `scoped` is the unfiltered twin of the view `status` builds, so queries/*.sql work here too.
 INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true); CREATE OR REPLACE VIEW scoped AS SELECT * FROM events;"
 
-# Warn (to stderr) if collected sessions are newer than the built parquet, so a
-# stale snapshot doesn't silently look like the latest data.
-newest_mtime() { find "$1" -name "$2" -type f -printf '%T@\n' 2>/dev/null | awk 'NR==1||$1>m{m=$1} END{if(m)print m}'; }
-src_m=$(newest_mtime "$ROOT/data/sessions" '*.jsonl')
-pq_m=$(newest_mtime "$ROOT/data/parquet" '*.parquet')
-if [[ -n "$src_m" ]] && { [[ -z "$pq_m" ]] || awk "BEGIN{exit !($src_m > $pq_m)}"; }; then
-  echo "warning: ./data/sessions has files newer than ./data/parquet — run './llmlake build' to refresh." >&2
-  echo >&2
-fi
+source "$ROOT/lib/freshness.sh"
+warn_stale_parquet "$ROOT"
 
 if [[ "${1:-}" == "-c" ]]; then
   shift

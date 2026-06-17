@@ -25,7 +25,9 @@ function parseArgs(argv: string[]): { view: string; flags: Flags } {
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!
-    if (a.startsWith('--')) {
+    if (a === '-h') {
+      flags.help = 'true'
+    } else if (a.startsWith('--')) {
       const key = a.slice(2)
       const next = argv[i + 1]
       if (next && !next.startsWith('--')) {
@@ -40,6 +42,30 @@ function parseArgs(argv: string[]): { view: string; flags: Flags } {
   }
   return { view: positional[0] ?? 'dashboard', flags }
 }
+
+const HELP = `Usage: ./llmlake status [view] [flags]
+
+Instant terminal dashboard over built parquet data.
+
+Views:
+  dashboard            Default: overview, findings, daily/project/model/activity/tool panels
+  insights             Overview + findings only
+  compare              Cross-agent comparison only
+
+Flags:
+  --period <period>    Time window: 7d, 30d, today, month, all (default: 7d)
+  --days <n>           Alias for --period <n>d
+  --agent <name>       Filter to one harness, e.g. claude, codex, pi, hermes
+  --cwd <text>         Filter sessions whose cwd contains text
+  --color true         Force ANSI color when stdout is not a TTY
+  -h, --help           Show this help
+
+Examples:
+  ./llmlake status
+  ./llmlake status --period 30d
+  ./llmlake status insights --agent claude --cwd llmlake
+  ./llmlake status compare --period all
+`
 
 const sqlLit = (s: string) => s.replace(/'/g, "''")
 
@@ -328,6 +354,10 @@ function renderPanel(p: Panel, rows: Row[], idx: number, periodLabel: string): s
 // ── main ────────────────────────────────────────────────────────────────────
 async function main() {
   const { view, flags } = parseArgs(process.argv.slice(2))
+  if (flags.help === 'true') {
+    process.stdout.write(HELP)
+    return
+  }
   colorEnabled = process.stdout.isTTY || flags.color === 'true'
 
   const panels = VIEWS[view]

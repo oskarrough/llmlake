@@ -9,7 +9,6 @@
 import { dirname, join, relative } from 'node:path'
 import { mkdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { Schema } from 'effect'
 import {
   AGENTS,
   buildCodexSessionIndex,
@@ -17,17 +16,13 @@ import {
   makeParseContext,
   newClaudeCrossFileRegistry,
   parseSessionText,
-  RowSchema,
   type Agent,
   type Row,
 } from './parse-session.ts'
+import { parseSessionRows } from './lib/build-session.ts'
 import { ensureDuckdb } from './lib/duck.ts'
 
 ensureDuckdb()
-
-// Validate each row against RowSchema at parse time so a bad row is caught
-// here (with file:line context) rather than as a cryptic duckdb COPY failure.
-const validateRow = Schema.validateSync(RowSchema)
 
 const root = join(import.meta.dir, 'data/sessions')
 const parquetRoot = join(import.meta.dir, 'data/parquet')
@@ -54,28 +49,13 @@ function outPathFor(agent: Agent, src: string): string {
 }
 
 async function parseFile(src: string, agent: Agent): Promise<Row[]> {
-  const ctx = makeParseContext(
+  return parseSessionRows({
+    src,
     agent,
-    relative(root, src),
-    root,
+    sessionsRoot: root,
     codexSessionIndex,
-    agent === 'claude' ? claudeCrossFile : undefined,
-  )
-  const parsed = await parseSessionText(await Bun.file(src).text(), ctx)
-  const rows: Row[] = []
-  for (const row of parsed) {
-    try {
-      rows.push(validateRow(row))
-    } catch (cause) {
-      throw new Error(
-        `row validation failed at ${ctx.sourceFile}:${row.source_line}: ${
-          cause instanceof Error ? cause.message : String(cause)
-        }`,
-        { cause },
-      )
-    }
-  }
-  return rows
+    ...(agent === 'claude' ? { claudeCrossFile } : {}),
+  })
 }
 
 class DuckdbWorker {

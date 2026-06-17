@@ -3,22 +3,11 @@
 // Usage: ./build-one.ts <session.jsonl> [out.parquet]
 import { basename, dirname, join, relative } from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
-import { Schema } from 'effect'
-import {
-  AGENTS,
-  buildCodexSessionIndex,
-  colsSql,
-  makeParseContext,
-  parseSessionText,
-  RowSchema,
-  type Agent,
-  type Row,
-} from './parse-session.ts'
+import { AGENTS, buildCodexSessionIndex, colsSql, type Agent } from './parse-session.ts'
+import { parseSessionRows } from './lib/build-session.ts'
 import { ensureDuckdb } from './lib/duck.ts'
 
 ensureDuckdb()
-
-const validateRow = Schema.validateSync(RowSchema)
 
 const src = process.argv[2]
 if (!src) {
@@ -45,16 +34,7 @@ const out =
   )
 
 const codexSessionIndex = await buildCodexSessionIndex(sessionsRoot)
-const ctx = makeParseContext(agent, sourceFile, sessionsRoot, codexSessionIndex)
-const rows: Row[] = []
-for (const row of await parseSessionText(await Bun.file(src).text(), ctx)) {
-  try {
-    rows.push(validateRow(row))
-  } catch (cause) {
-    console.error(`row validation failed at ${ctx.sourceFile}:${row.source_line}`)
-    throw cause
-  }
-}
+const rows = await parseSessionRows({ src, agent, sessionsRoot, codexSessionIndex, sourceFile })
 
 await mkdir(dirname(out), { recursive: true })
 
