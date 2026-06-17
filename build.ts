@@ -21,13 +21,9 @@ import {
   type Agent,
   type Row,
 } from './parse-session.ts'
+import { ensureDuckdb } from './lib/duck.ts'
 
-try {
-  Bun.spawnSync(['duckdb', '--version'])
-} catch {
-  console.error('duckdb not found. Install it from https://duckdb.org/docs/installation/')
-  process.exit(1)
-}
+ensureDuckdb()
 
 // Validate each row against RowSchema at parse time so a bad row is caught
 // here (with file:line context) rather than as a cryptic duckdb COPY failure.
