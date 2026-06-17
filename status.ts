@@ -75,10 +75,17 @@ type Panel =
   | { q: string; title: string; render: 'header' }
   | { q: string; title: string; render: 'bars'; label: string; value: string; extra?: string[] }
   | { q: string; title: string; render: 'table' }
+  | { q: string; title: string; render: 'findings' }
+
+const overview: Panel = { q: 'overview', title: 'Overview', render: 'header' }
+const insights: Panel = { q: 'insights', title: 'What to improve', render: 'findings' }
+const crossAgent: Panel = { q: 'cross-agent', title: 'By Agent', render: 'table' }
 
 const VIEWS: Record<string, Panel[]> = {
+  // Default: lead with what to improve, then the usual cost/activity breakdown.
   dashboard: [
-    { q: 'overview', title: 'Overview', render: 'header' },
+    overview,
+    insights,
     {
       q: 'daily-activity',
       title: 'Daily Activity',
@@ -111,8 +118,13 @@ const VIEWS: Record<string, Panel[]> = {
       value: 'calls',
       extra: ['pct'],
     },
-    { q: 'tools', title: 'Tools', render: 'table' },
+    { q: 'tool-reliability', title: 'Tools (calls & errors)', render: 'table' },
+    crossAgent,
   ],
+  // Just the actionable findings — `./llmlake status insights`.
+  insights: [overview, insights],
+  // Cross-agent comparison — `./llmlake status compare`.
+  compare: [crossAgent],
 }
 
 const panels = VIEWS[viewName]
@@ -220,6 +232,13 @@ function toNum(v: unknown): number | null {
   if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v)
   return null
 }
+// Coerce a JSON cell (string | number | boolean | object | null) to a display
+// string without tripping the lint against String(unknown).
+function str(v: unknown): string {
+  if (v == null) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v as string | number | boolean | bigint)
+}
 function humanInt(n: number): string {
   return Math.round(n).toLocaleString('en-US')
 }
@@ -236,7 +255,7 @@ function fmtCost(n: number): string {
 function fmtValue(col: string, v: unknown): string {
   if (v == null) return '–'
   const n = toNum(v)
-  if (n == null) return String(v)
+  if (n == null) return str(v)
   const k = col.toLowerCase()
   if (k.includes('cost') || k.includes('usd')) return fmtCost(n)
   if (k.includes('pct')) return n.toFixed(1) + '%'
@@ -289,18 +308,49 @@ function renderHeader(rows: Record<string, unknown>[]) {
 function renderBars(rows: Record<string, unknown>[], p: Extract<Panel, { render: 'bars' }>) {
   const vals = rows.map((r) => toNum(r[p.value]) ?? 0)
   const max = Math.max(1, ...vals)
-  const labelW = Math.min(24, Math.max(...rows.map((r) => String(r[p.label] ?? '').length)))
+  const labelW = Math.min(24, Math.max(...rows.map((r) => str(r[p.label]).length)))
   const valW = Math.max(...rows.map((_, i) => fmtValue(p.value, vals[i]).length))
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!
-    const label = String(r[p.label] ?? '')
-      .slice(0, labelW)
-      .padEnd(labelW)
+    const label = str(r[p.label]).slice(0, labelW).padEnd(labelW)
     const val = fmtValue(p.value, vals[i]).padStart(valW)
     const extras = (p.extra ?? []).map((k) => c(DIM, fmtValue(k, r[k]))).join('  ')
     out.push(
       `${bar(vals[i]! / max, BAR_W)} ${label}  ${c(BOLD, val)}${extras ? '  ' + extras : ''}`,
     )
+  }
+}
+
+// Wrap prose to `width`, indenting continuation lines by `indent` spaces.
+function wrap(text: string, width: number, indent: number): string[] {
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let line = ''
+  for (const w of words) {
+    if (line && line.length + 1 + w.length > width) {
+      lines.push(line)
+      line = ' '.repeat(indent) + w
+    } else {
+      line = line ? line + ' ' + w : ' '.repeat(indent) + w
+    }
+  }
+  if (line.trim()) lines.push(line)
+  return lines
+}
+
+const RED = fg(255, 95, 95)
+const GREEN = fg(120, 220, 130)
+
+// Findings teach you what to change: a colored headline + a wrapped tip. An
+// empty result means nothing crossed a threshold, so we say so explicitly.
+function renderFindings(rows: Record<string, unknown>[]) {
+  if (rows.length === 0) {
+    out.push(c(GREEN, '✓ Nothing stands out — your sessions look healthy for this period.'))
+    return
+  }
+  for (const r of rows) {
+    out.push(c(BOLD + RED, '• ' + str(r.title)))
+    for (const line of wrap(str(r.detail), 80, 2)) out.push(c(DIM, line))
   }
 }
 
@@ -321,7 +371,8 @@ const duck = new Duck()
 await duck.init(initSql)
 
 // Bail early with a friendly message if the lake is empty for this scope.
-const [{ n = 0 } = {}] = (await duck.rows('SELECT count(*) AS n FROM scoped')) as { n: number }[]
+const [first] = (await duck.rows('SELECT count(*) AS n FROM scoped')) as { n: number }[]
+const n = first?.n ?? 0
 if (!n) {
   await duck.close()
   console.error(
@@ -339,10 +390,12 @@ let idx = 0
 for (const p of panels) {
   const sql = await Bun.file(join(queriesDir, `${p.q}.sql`)).text()
   const rows = await duck.rows(sql)
-  if (rows.length === 0) continue // skip empty panels rather than render a void
+  // Findings render a healthy message when empty; other panels skip a void.
+  if (rows.length === 0 && p.render !== 'findings') continue
   title(p.title, idx++)
   if (p.render === 'header') renderHeader(rows)
   else if (p.render === 'bars') renderBars(rows, p)
+  else if (p.render === 'findings') renderFindings(rows)
   else renderTable(rows)
   out.push('')
 }
