@@ -1,24 +1,27 @@
 // Agents name session dirs after their cwd (`/` → `-`), so filesystem casing
 // leaks in: macOS `-Users-osk-Sites-arbe` vs Linux `-users-osk-sites-arbe`.
-// Dropbox is case-insensitive and forks "(case conflict)" copies that never
-// converge. This canonicalizes a tree to lowercase, conflict-free names: encoded
-// dir names (starting with `-`) are lowercased and any " (case conflict…)" suffix
-// stripped; when two entries collapse to one name, dirs merge recursively and
-// files keep the LARGER copy (logs are append-only, so larger = more complete).
-// Agent dirs (claude/, pi/, …) keep their names; only the path dirs below normalize.
+// Sync tools then fork duplicates that never reconverge: Dropbox makes
+// "(case conflict)" copies (case-insensitive FS) and "(<user>'s conflicted copy
+// <date>)" copies (same file edited on two machines). Left in place these parse
+// as extra sessions (double-counted tokens) and an apostrophe can wedge the
+// parquet build. This canonicalizes a tree to lowercase, conflict-free names;
+// the per-function comments below cover the merge mechanics.
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
-const CASE_CONFLICT = /\s*\(case conflict[^)]*\)/gi
+// Any parenthetical mentioning a conflict: "(case conflict)", "(case conflict 1)",
+// "(oskar's conflicted copy 2026-06-09)", etc. Agent session names are UUIDs, so
+// matching on the word "conflict" inside parens won't catch a legitimate name.
+const SYNC_CONFLICT = /\s*\([^)]*conflict[^)]*\)/gi
 
 function canonicalDir(name: string): string {
-  const c = name.replace(CASE_CONFLICT, '')
+  const c = name.replace(SYNC_CONFLICT, '')
   return c.startsWith('-') ? c.toLowerCase() : c
 }
 
 function canonicalFile(name: string): string {
-  return name.replace(CASE_CONFLICT, '')
+  return name.replace(SYNC_CONFLICT, '')
 }
 
 export interface NormalizeStats {
@@ -107,7 +110,8 @@ async function normalizeChildren(dir: string, stats: NormalizeStats) {
 
 // Canonicalize a session tree in place (e.g. data/sessions or a sync dest).
 // Idempotent. Agent dirs keep their names; encoded-path dirs beneath them are
-// lowercased and "(case conflict)" variants are merged.
+// lowercased and sync-conflict variants ("(case conflict)", "(… conflicted
+// copy …)") are merged into the canonical entry.
 export async function normalizeSessionTree(root: string): Promise<NormalizeStats> {
   const stats: NormalizeStats = { renamed: 0, merged: 0, removed: 0 }
   if (existsSync(root)) await normalizeChildren(root, stats)

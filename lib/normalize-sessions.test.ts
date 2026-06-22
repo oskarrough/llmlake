@@ -56,6 +56,27 @@ test('merges a case-conflict fork, keeping the larger file', async () => {
   )
 })
 
+// A sync "conflicted copy" (here Dropbox-style) is a duplicate file alongside its
+// original. It must be merged into the canonical name (keeping the larger log), not
+// left behind as a second session — and the apostrophe used to wedge the SQL that
+// builds the parquet.
+test('merges a "conflicted copy" file into its canonical original', async () => {
+  await seed('claude/-users-oskar-sites-arbe/s.jsonl', 'short')
+  await seed(
+    "claude/-users-oskar-sites-arbe/s (oskar's conflicted copy 2026-06-09).jsonl",
+    'much-longer-content',
+  )
+
+  const stats = await normalizeSessionTree(root)
+
+  const files = await readdir(join(root, 'claude/-users-oskar-sites-arbe'))
+  expect(files).toEqual(['s.jsonl'])
+  expect(await readFile(join(root, 'claude/-users-oskar-sites-arbe/s.jsonl'), 'utf8')).toBe(
+    'much-longer-content',
+  )
+  expect(stats.removed).toBe(1)
+})
+
 test('is idempotent on an already-canonical tree', async () => {
   await seed('claude/-Users-oskar-Sites-x/a.jsonl', 'data')
   await normalizeSessionTree(root)

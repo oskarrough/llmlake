@@ -13,9 +13,8 @@ import {
   AGENTS,
   buildCodexSessionIndex,
   colsSql,
-  makeParseContext,
   newClaudeCrossFileRegistry,
-  parseSessionText,
+  populateClaudeCrossFile,
   type Agent,
   type Row,
 } from './parse-session.ts'
@@ -29,12 +28,6 @@ const parquetRoot = join(import.meta.dir, 'data/parquet')
 const codexSessionIndex = await buildCodexSessionIndex(root)
 const claudeCrossFile = newClaudeCrossFileRegistry()
 
-for await (const src of new Bun.Glob('claude/**/*.jsonl').scan({ cwd: root, absolute: true })) {
-  const rel = relative(root, src)
-  const ctx = makeParseContext('claude', rel, root, codexSessionIndex, claudeCrossFile)
-  await parseSessionText(await Bun.file(src).text(), ctx, { registerClaudeCrossFile: true })
-}
-
 async function fileMtime(path: string): Promise<number | null> {
   try {
     return (await stat(path)).mtimeMs
@@ -47,6 +40,18 @@ function outPathFor(agent: Agent, src: string): string {
   const rel = relative(join(root, agent), src).replace(/\.jsonl$/, '.parquet')
   return join(parquetRoot, `agent=${agent}`, rel)
 }
+
+async function needsRebuild(src: string, agent: Agent): Promise<boolean> {
+  const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(outPathFor(agent, src))])
+  return !(srcM != null && outM != null && outM >= srcM)
+}
+
+// Claude writes the same usage record into multiple files (resumed sessions,
+// subagents, sidechains); this registers one winner per usage key so the build
+// counts each call once. Skipped entirely when no claude file is stale.
+await populateClaudeCrossFile(claudeCrossFile, root, codexSessionIndex, (src) =>
+  needsRebuild(src, 'claude'),
+)
 
 async function parseFile(src: string, agent: Agent): Promise<Row[]> {
   return parseSessionRows({
@@ -73,9 +78,14 @@ class DuckdbWorker {
   async copy(rows: Row[], out: string): Promise<void> {
     await Bun.write(this.tmpJson, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     const marker = `__llmlake_done_${++this.seq}__`
+    // Paths are interpolated into SQL string literals; any single quote closes
+    // the literal early, so duckdb never reaches `.print` and the marker read
+    // below blocks forever. Double them. (Dropbox "conflicted copy" paths like
+    // `…(r's conflicted copy).parquet` are the usual source of an apostrophe.)
+    const sqlStr = (s: string) => s.replaceAll("'", "''")
     await this.proc.stdin.write(
-      `COPY (SELECT * FROM read_json('${this.tmpJson}', format='newline_delimited', columns={${colsSql}})) ` +
-        `TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
+      `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', columns={${colsSql}})) ` +
+        `TO '${sqlStr(out)}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
     )
     await this.proc.stdin.flush()
     while (!this.buffer.includes(marker)) {
@@ -126,12 +136,11 @@ async function workerLoop(id: number) {
           unknown++
           continue
         }
-        const out = outPathFor(agent, src)
-        const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(out)])
-        if (srcM != null && outM != null && outM >= srcM) {
+        if (!(await needsRebuild(src, agent))) {
           skipped++
           continue
         }
+        const out = outPathFor(agent, src)
         const rows = await parseFile(src, agent)
         await mkdir(dirname(out), { recursive: true })
         worker ??= new DuckdbWorker(id)

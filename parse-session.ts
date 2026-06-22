@@ -1,7 +1,7 @@
 // Parse one JSONL line from a raw agent session (claude, pi, codex, hermes)
 // into a normalized Row in the llmlake schema. The driver supplies a
 // ParseContext (agent, source file path, mutable state carried across lines).
-import { basename, join } from 'node:path'
+import { basename, join, relative } from 'node:path'
 import { Option, Schema, SchemaAST } from 'effect'
 import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
@@ -1062,4 +1062,40 @@ export async function parseSessionText(
     }
   }
   return rows
+}
+
+// Pass 1 of the claude build: scan every claude session and record one usage
+// "winner" per (session, message, request) into `registry`, so finalize can
+// suppress the duplicate copies the same call leaves in resumed/subagent/
+// sidechain files (see registerClaudeCrossFileWinners / finalizeClaudeUsage).
+// Choosing a winner needs a global view, so this must read *all* claude files —
+// pure waste on a no-op build. So skip the whole pass unless at least one claude
+// file is stale; when anything is stale we rescan everything, since a winner in
+// an unchanged file can still suppress usage on a rebuilt one. Winners are
+// chosen by a total order, so scan order doesn't affect the result.
+export async function populateClaudeCrossFile(
+  registry: ClaudeCrossFileRegistry,
+  sessionsRoot: string,
+  codexSessionIndex: ReadonlyMap<string, string>,
+  needsRebuild: (src: string) => Promise<boolean>,
+): Promise<void> {
+  const files: string[] = []
+  for await (const src of new Bun.Glob('claude/**/*.jsonl').scan({
+    cwd: sessionsRoot,
+    absolute: true,
+    onlyFiles: true,
+  }))
+    files.push(src)
+  const stale = (await Promise.all(files.map(needsRebuild))).some(Boolean)
+  if (!stale) return
+  for (const src of files) {
+    const ctx = makeParseContext(
+      'claude',
+      relative(sessionsRoot, src),
+      sessionsRoot,
+      codexSessionIndex,
+      registry,
+    )
+    await parseSessionText(await Bun.file(src).text(), ctx, { registerClaudeCrossFile: true })
+  }
 }
