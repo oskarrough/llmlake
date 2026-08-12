@@ -3,12 +3,14 @@
 -- so a healthy lake returns nothing. `ord` orders them; `title` is the
 -- headline (with the number), `detail` is the concrete fix.
 WITH tc AS (
-  SELECT tool_call_id, lower(tool_name) AS t, tool_name, session_id, tool_input
+  SELECT agent, tool_call_id, lower(tool_name) AS t, tool_name, session_id, tool_input
   FROM scoped
   WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
 ),
 results AS (
   SELECT
+    agent,
+    session_id,
     tool_call_id,
     (
       coalesce(is_error, false)
@@ -21,7 +23,7 @@ results AS (
 tool_err AS (
   SELECT tc.tool_name, count(*) AS n, count(*) FILTER (WHERE r.err) AS errs
   FROM tc
-  JOIN results r USING (tool_call_id)
+  JOIN results r USING (agent, session_id, tool_call_id)
   GROUP BY 1
 ),
 reads AS (

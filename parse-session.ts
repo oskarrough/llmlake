@@ -518,11 +518,9 @@ const CLAUDE_META_TYPES = new Set([
   'worktree-state',
 ])
 
-function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row[] {
-  const { state } = ctx
-  let ev: any
+function parseJsonLine(line: string, lineNo: number, ctx: ParseContext): any {
   try {
-    ev = JSON.parse(line)
+    return JSON.parse(line)
   } catch {
     if (!ctx.quiet) {
       const kind = line.trimEnd().endsWith('}') ? 'malformed' : 'truncated'
@@ -530,8 +528,14 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
         `dropped ${kind} line ${lineNo} in ${ctx.sourceFile} (1 line skipped, rest of session built)`,
       )
     }
-    return []
+    return null
   }
+}
+
+function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row[] | null {
+  const { state } = ctx
+  const ev = parseJsonLine(line, lineNo, ctx)
+  if (ev == null) return null
   const msg = ev.message ?? {}
   const usage = msg.usage ?? {}
   const content = msg.content
@@ -683,7 +687,8 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
 
 function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
-  const ev = JSON.parse(line)
+  const ev = parseJsonLine(line, lineNo, ctx)
+  if (ev == null) return []
   const msg = ev.message ?? {}
   const usage = msg.usage ?? {}
   const content = msg.content
@@ -793,7 +798,8 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
 
 function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null {
   const { state } = ctx
-  const ev = JSON.parse(line)
+  const ev = parseJsonLine(line, lineNo, ctx)
+  if (ev == null) return null
   const p = ev.payload ?? {}
 
   if (state.session_id == null) {
@@ -908,7 +914,8 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
 
 function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
-  const ev = JSON.parse(line)
+  const ev = parseJsonLine(line, lineNo, ctx)
+  if (ev == null) return []
 
   // session_meta — extract provider and model, skip row
   if (ev.role === 'session_meta') {

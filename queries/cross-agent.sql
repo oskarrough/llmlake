@@ -14,12 +14,14 @@ WITH agg AS (
   GROUP BY 1
 ),
 calls AS (
-  SELECT agent, tool_call_id
+  SELECT agent, session_id, tool_call_id
   FROM scoped
   WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND tool_call_id IS NOT NULL
 ),
 results AS (
   SELECT
+    agent,
+    session_id,
     tool_call_id,
     (
       coalesce(is_error, false)
@@ -34,7 +36,7 @@ errs AS (
     c.agent,
     round(100.0 * count(*) FILTER (WHERE r.err) / nullif(count(r.tool_call_id), 0), 1) AS tool_err_pct
   FROM calls c
-  LEFT JOIN results r USING (tool_call_id)
+  LEFT JOIN results r USING (agent, session_id, tool_call_id)
   GROUP BY 1
 )
 SELECT

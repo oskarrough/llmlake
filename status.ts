@@ -373,7 +373,13 @@ async function main() {
   for (const p of panels) {
     queries[p.question] ??= await Bun.file(join(queriesDir, `${p.question}.sql`)).text()
   }
-  const results = await runQuestions(initSql(scope), queries)
+  let results: Record<string, Row[]>
+  try {
+    results = await runQuestions(initSql(scope), queries)
+  } catch (cause) {
+    console.error(cause instanceof Error ? cause.message : String(cause))
+    process.exit(1)
+  }
 
   if ((toNum(results._count?.[0]?.n) ?? 0) === 0) {
     console.error(
