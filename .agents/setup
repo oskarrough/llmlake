@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+started=$SECONDS
+echo "[setup] Installing system prerequisites"
+
+packages=(ca-certificates curl gzip rsync unzip)
+missing=()
+for package in "${packages[@]}"; do
+  dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' || missing+=("$package")
+done
+
+if ((${#missing[@]})); then
+  if ((EUID == 0)); then
+    apt=(apt-get)
+  else
+    apt=(sudo -n apt-get)
+  fi
+  "${apt[@]}" update
+  "${apt[@]}" install -y --no-install-recommends "${missing[@]}"
+else
+  echo "[setup] System prerequisites already installed"
+fi
+
+mkdir -p "$HOME/.local/bin"
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
+
+profile_marker='# llmlake orb tools'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >>"$HOME/.bash_profile" <<'EOF'
+
+# llmlake orb tools
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
+EOF
+fi
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "[setup] Installing Bun"
+  curl -fsSL https://bun.sh/install | bash
+else
+  echo "[setup] Bun $(bun --version) already installed"
+fi
+
+if ! command -v duckdb >/dev/null 2>&1; then
+  echo "[setup] Installing DuckDB CLI"
+  curl -fsSL https://install.duckdb.org | bash
+  ln -sfn "$HOME/.duckdb/cli/latest/duckdb" "$HOME/.local/bin/duckdb"
+else
+  echo "[setup] DuckDB $(duckdb --version) already installed"
+fi
+
+echo "[setup] Installing locked Bun dependencies"
+bun install --frozen-lockfile
+
+echo "[setup] Complete in $((SECONDS - started))s"

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+for command in bun duckdb rsync; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "[resume] Missing required command: $command (rerun .agents/setup)" >&2
+    exit 1
+  fi
+done
+
+echo "[resume] llmlake prerequisites ready"
