@@ -2,17 +2,19 @@
 // Two-way merge data/sessions/ with a shared library folder using rsync.
 // Reports per-direction added/removed session (.jsonl) counts.
 import { $ } from 'bun'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { formatDiff, listSessions } from './lib/diff.ts'
+import { diffCounts, listSessions } from './lib/diff.ts'
+import { expandHome } from './lib/expand-home.ts'
 import { normalizeSessionTree } from './lib/normalize-sessions.ts'
+import { bold, formatDelta, renderRows, shortPath } from './lib/ui.ts'
 
 const arg = process.argv[2]
 if (!arg) {
   console.error('usage: sync <dest>')
   process.exit(1)
 }
-const dest = arg.replace(/^~(?=$|\/)/, homedir())
+// Trailing slashes are stripped so `sync ~/dir/` doesn't print `~/dir//`.
+const dest = expandHome(arg).replace(/\/+$/, '')
 const src = join(import.meta.dir, 'data/sessions')
 
 // Some rsync exit codes are benign for a live Dropbox folder and must NOT abort
@@ -29,13 +31,11 @@ const src = join(import.meta.dir, 'data/sessions')
 // hydration of hundreds of online-only files, which pegs Dropbox and the machine.
 const BENIGN = new Set([23, 24, 30])
 
-async function rsync(from: string, to: string) {
+async function rsync(from: string, to: string): Promise<string | null> {
   const { exitCode, stderr } = await $`rsync -a ${from}/ ${to}/`.nothrow().quiet()
-  if (exitCode === 0) return
+  if (exitCode === 0) return null
   if (!BENIGN.has(exitCode)) throw new Error(stderr.toString())
-  console.warn(
-    `warning: rsync ${from} → ${to} skipped some files (Dropbox not yet downloaded); next run picks them up`,
-  )
+  return 'some files not downloaded by Dropbox yet; next run picks them up'
 }
 
 await $`mkdir -p ${dest}`
@@ -45,10 +45,26 @@ await $`mkdir -p ${dest}`
 await normalizeSessionTree(src)
 await normalizeSessionTree(dest)
 
-const destBefore = listSessions(dest)
-await rsync(src, dest)
-console.log(`synced ${src}/ → ${dest}/  ${formatDiff(destBefore, listSessions(dest))}`)
+async function move(label: string, from: string, to: string) {
+  const before = listSessions(to)
+  const warning = await rsync(from, to)
+  const after = listSessions(to)
+  const { added, removed } = diffCounts(before, after)
+  return {
+    label,
+    delta: formatDelta(added, removed),
+    total: after.size,
+    detail: `${shortPath(from)} → ${shortPath(to)}`,
+    warning,
+  }
+}
 
-const srcBefore = listSessions(src)
-await rsync(dest, src)
-console.log(`synced ${dest}/ → ${src}/  ${formatDiff(srcBefore, listSessions(src))}`)
+const moves = [await move('push', src, dest), await move('pull', dest, src)]
+
+console.log(bold(`sync ${shortPath(dest)}`))
+const lines = renderRows(moves)
+for (const [i, line] of lines.entries()) {
+  console.log(line)
+  const warning = moves[i]?.warning
+  if (warning) console.log(`  warning: ${warning}`)
+}

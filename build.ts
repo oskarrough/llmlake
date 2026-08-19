@@ -20,6 +20,7 @@ import {
 } from './parse-session.ts'
 import { parseSessionRows } from './lib/build-session.ts'
 import { ensureDuckdb } from './lib/duck.ts'
+import { bold, dim, plural } from './lib/ui.ts'
 
 ensureDuckdb()
 
@@ -166,9 +167,15 @@ if (unknown) {
   )
 }
 
+console.log(bold('build'))
 console.log(
-  `built ${built}, skipped ${skipped}${errors ? `, errors ${errors}` : ''}${
-    unknown ? `, ignored ${unknown}` : ''
-  } (of ${files.length})`,
+  `  ${plural(built, 'file')} built  ${dim(
+    [
+      `${skipped} unchanged`,
+      ...(errors ? [`${errors} failed`] : []),
+      ...(unknown ? [`${unknown} ignored`] : []),
+      `${files.length} total`,
+    ].join(' · '),
+  )}`,
 )
 if (errors) process.exit(1)

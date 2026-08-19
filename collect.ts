@@ -1,21 +1,37 @@
 #!/usr/bin/env bun
-// Run every collect-*.ts in parallel, then canonicalize the session tree so
-// case/conflict variants (e.g. macOS ~/Sites vs Linux ~/sites) don't pile up.
-import { $ } from 'bun'
+// Run every collector, canonicalize the session tree so case/conflict variants
+// (e.g. macOS ~/Sites vs Linux ~/sites) don't pile up, then print one table.
+// Collectors run in parallel but are rendered in a fixed order.
 import { join } from 'node:path'
+import { collectClaude } from './collect-claude.ts'
+import { collectCodex } from './collect-codex.ts'
+import { collectCursor } from './collect-cursor.ts'
+import { collectHermes } from './collect-hermes.ts'
+import { collectPi } from './collect-pi.ts'
+import { resultRow } from './lib/collect.ts'
+import { listSessions } from './lib/diff.ts'
 import { normalizeSessionTree } from './lib/normalize-sessions.ts'
-
-const scripts = [
-  'collect-claude.ts',
-  'collect-pi.ts',
-  'collect-codex.ts',
-  'collect-hermes.ts',
-  'collect-cursor.ts',
-]
-await Promise.all(scripts.map((s) => $`bun run ${join(import.meta.dir, s)}`))
+import { bold, dim, plural, renderRows, shortPath } from './lib/ui.ts'
 
 const root = join(import.meta.dir, 'data/sessions')
-const s = await normalizeSessionTree(root)
-if (s.renamed || s.merged || s.removed) {
-  console.log(`normalized: renamed ${s.renamed}, merged ${s.merged}, removed ${s.removed} dupes`)
+
+const results = await Promise.all([
+  collectClaude(),
+  collectCodex(),
+  collectCursor(),
+  collectHermes(),
+  collectPi(),
+])
+
+const norm = await normalizeSessionTree(root)
+
+console.log(bold('collect'))
+for (const line of renderRows(results.map(resultRow))) console.log(line)
+
+if (norm.renamed || norm.merged || norm.removed) {
+  console.log(
+    dim(`  cleaned  renamed ${norm.renamed}, merged ${norm.merged}, removed ${norm.removed} dupes`),
+  )
 }
+
+console.log(`  ${plural(listSessions(root).size, 'session')} in ${shortPath(root)}`)

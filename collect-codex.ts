@@ -3,13 +3,21 @@
 // and $CODEX_HOME/archived_sessions/*.jsonl. CODEX_HOME defaults to ~/.codex.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { collect, sessionsDir } from './lib/collect.ts'
+import { collect, formatResult, sessionsDir, type CollectResult } from './lib/collect.ts'
 import { expandHome } from './lib/expand-home.ts'
+import { shortPath } from './lib/ui.ts'
 
-const home = expandHome(process.env.CODEX_HOME?.trim() || join(homedir(), '.codex'))
-const dst = sessionsDir('codex')
+export function collectCodex(): Promise<CollectResult> {
+  const home = expandHome(process.env.CODEX_HOME?.trim() || join(homedir(), '.codex'))
+  const dst = sessionsDir('codex')
+  return collect(`codex`, dst, [
+    { src: join(home, 'sessions/'), label: shortPath(home) },
+    {
+      src: join(home, 'archived_sessions/'),
+      dst: join(dst, 'archived_sessions/'),
+      label: shortPath(home),
+    },
+  ])
+}
 
-await collect(`codex (${home})`, dst, [
-  { src: join(home, 'sessions/') },
-  { src: join(home, 'archived_sessions/'), dst: join(dst, 'archived_sessions/') },
-])
+if (import.meta.main) console.log(formatResult(await collectCodex()))
