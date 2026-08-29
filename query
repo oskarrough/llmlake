@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB="$ROOT/data/llmlake.duckdb"
 PARQUET="$ROOT/data/parquet/**/*.parquet"
 # `scoped` is the unfiltered twin of the view `status` builds, so queries/*.sql work here too.
-INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true); CREATE OR REPLACE VIEW scoped AS SELECT * FROM events;"
+INIT="CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('$PARQUET', hive_partitioning=true, union_by_name=true); CREATE OR REPLACE VIEW scoped AS SELECT * FROM events; $(cat "$ROOT/lib/classified.sql")"
 
 source "$ROOT/lib/freshness.sh"
 warn_stale_parquet "$ROOT"

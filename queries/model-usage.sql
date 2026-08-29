@@ -1,14 +1,20 @@
--- Token volume and cost per (agent, model); cost_usd is provider-recorded for pi, computed in parse-session for claude/codex.
+-- Token volume and API-equivalent value per (agent, model, route) from classified (cost_provenance is agent-determined; see classified); estimated_value_usd is published-rate value, never billed spend.
 SELECT
   agent,
-  model,
-  count(DISTINCT session_id)            AS sessions,
-  count(*)                              AS events,
-  sum(coalesce(input_tokens, 0))        AS in_tok,
-  sum(coalesce(output_tokens, 0))       AS out_tok,
-  sum(coalesce(cache_read_tokens, 0))   AS cache_read,
-  round(sum(coalesce(cost_usd, 0)), 4)  AS cost_usd
-FROM events
+  coalesce(model, '(unknown model)')   AS model,
+  vendor,
+  route,
+  billing_mode,
+  count(DISTINCT session_id)           AS sessions,
+  count(*)                             AS events,
+  sum(coalesce(input_tokens, 0))       AS input_tokens,
+  sum(coalesce(output_tokens, 0))      AS output_tokens,
+  sum(coalesce(cache_read_tokens, 0))  AS cache_read_tokens,
+  sum(coalesce(cache_write_tokens, 0)) AS cache_write_tokens,
+  round(sum(estimated_value_usd), 4)   AS estimated_value_usd
+FROM classified
 WHERE model IS NOT NULL
-GROUP BY 1, 2
-ORDER BY cost_usd DESC;
+  OR input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+  OR cache_read_tokens IS NOT NULL OR cache_write_tokens IS NOT NULL
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY estimated_value_usd DESC;

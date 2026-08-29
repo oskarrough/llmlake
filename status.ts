@@ -6,6 +6,7 @@ import { BOLD, DIM, paint, setColorEnabled } from './lib/ui.ts'
 
 const queriesDir = join(import.meta.dir, 'queries')
 const parquetGlob = join(import.meta.dir, 'data/parquet/**/*.parquet')
+const classifiedSql = await Bun.file(join(import.meta.dir, 'lib/classified.sql')).text()
 
 // ── args + scope ────────────────────────────────────────────────────────────
 type Flags = Record<string, string>
@@ -156,6 +157,7 @@ function initSql(scope: Scope): string {
   return [
     `CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('${parquetGlob}', hive_partitioning=true, union_by_name=true);`,
     `CREATE OR REPLACE VIEW scoped AS SELECT * FROM events WHERE\n    ${scope.where};`,
+    classifiedSql,
   ].join('\n')
 }
 
