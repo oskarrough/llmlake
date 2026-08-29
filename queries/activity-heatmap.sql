@@ -1,5 +1,4 @@
--- When do I work? Events by day-of-week × hour-of-day (local time = whatever ts is stored as).
--- dow: 0=Sun .. 6=Sat
+-- When do I work? Events by day-of-week × hour-of-day (dow: 0=Sun..6=Sat; local time = whatever ts is stored as).
 SELECT
   dayofweek(ts) AS dow,
   hour(ts)      AS hour,

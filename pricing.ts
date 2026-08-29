@@ -1,17 +1,4 @@
-// Per-million-token USD prices, keyed by exact model string as logged.
-// Pi rows already carry a provider-recorded cost; this table is used to
-// compute cost for Claude and Codex rows at parse time.
-//
-// Prices come from two sources, merged at module load:
-//   1. litellm-pricing.json — a filtered mirror of LiteLLM's community price
-//      list (refresh with ./sync-pricing.ts). Covers the long tail of models
-//      and carries above-200k tier rates and context limits.
-//   2. The PRICING table below — curated overrides that always win over the
-//      snapshot, and a floor for brand-new models LiteLLM hasn't listed yet.
-//
-// Cache pricing assumes Anthropic's 5-minute ephemeral cache: cache_read =
-// 0.1× input, cache_write = 1.25× input. For OpenAI/Codex, cached_input is
-// 0.25× input. Override per-model below if you need different ratios.
+// Per-million USD prices keyed by exact model string. Pi rows carry their own cost; this prices Claude and Codex rows at parse time. Sources merged at load: litellm-pricing.json (filtered LiteLLM mirror, refresh with ./sync-pricing.ts) + the curated PRICING table, which always wins. Cache assumes Anthropic's 5-min cache (read 0.1×, write 1.25× input); OpenAI cached_input 0.25×.
 import LITELLM from './litellm-pricing.json' with { type: 'json' }
 
 export type Price = {
@@ -19,8 +6,7 @@ export type Price = {
   output: number
   cache_read?: number
   cache_write?: number
-  // Marginal rates for tokens above 200k of context (Anthropic long-context
-  // tier). Absent means the model is billed at the flat rate regardless of size.
+  // Marginal rates above 200k context (Anthropic long-context tier); absent = flat rate.
   input_above_200k?: number
   output_above_200k?: number
   cache_read_above_200k?: number
@@ -47,8 +33,7 @@ export const PRICING: Record<string, Price> = {
   'gpt-5.4-mini': { input: 0.75, output: 4.5 },
   'gpt-5.5': { input: 5.0, output: 30.0 },
 
-  // Qwen pricing varies by provider ($0.32–0.60 / $2.00–3.20). Omitted until
-  // we know the actual provider Pi routes to.
+  // Qwen omitted: pricing varies by provider until we know which one Pi routes to.
 }
 
 type Tokens = {
@@ -62,8 +47,7 @@ const CODEX_DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/
 const CLAUDE_DATE_SUFFIX = /-\d{8}$/
 const CLAUDE_VERSION_SUFFIX = /-v\d+:\d+$/
 
-// LiteLLM reports per-token USD; we bill in per-million. One pass at load time
-// converts the snapshot into the Price shape and merges the curated overrides.
+// LiteLLM reports per-token USD; convert to per-million at load and merge the curated overrides.
 type LitellmEntry = {
   input_cost_per_token?: number
   output_cost_per_token?: number
@@ -93,9 +77,7 @@ function fromLitellm(e: LitellmEntry): Price | undefined {
   return p
 }
 
-// Merged lookup: LiteLLM snapshot as the base, curated PRICING overlaid on top.
-// Spreading the curated entry over the snapshot keeps the snapshot's tier fields
-// while letting hand-entered input/output/cache rates win.
+// LiteLLM snapshot as base, curated PRICING spread over it (keeps snapshot tier fields, curated rates win).
 const MERGED: Record<string, Price> = {}
 for (const [model, entry] of Object.entries(LITELLM as Record<string, LitellmEntry>)) {
   const p = fromLitellm(entry)
@@ -105,16 +87,11 @@ for (const [model, override] of Object.entries(PRICING)) {
   MERGED[model] = { ...MERGED[model], ...override }
 }
 
-// Resolved-price cache. parse-session calls compute* once per row and the same
-// model string repeats across a session, so memoizing turns the fuzzy scan into
-// a one-time cost per distinct model name.
+// Memoized price lookup: the same model string repeats across rows, so the fuzzy scan runs once per distinct name.
 const RESOLVED = new Map<string, Price | null>()
 
 // --- Fuzzy model matching (ported from ccusage) -----------------------------
-// Logged model names carry provider prefixes (anthropic., openai/, openrouter/
-// anthropic/...), separator variants (claude-opus-4.8 vs -4-8, @ in vertex
-// names) and date suffixes. We match across those while refusing to fall back
-// across distinct numeric versions (so claude-opus-4.8 never bills as opus-4).
+// Logged names carry provider prefixes, separator variants and date suffixes; match across those but never collapse distinct numeric versions.
 
 const isBoundary = (code: number): boolean =>
   !((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122))
@@ -122,8 +99,7 @@ const isBoundary = (code: number): boolean =>
 const normalizeKey = (s: string): string =>
   s.includes('.') || s.includes('@') ? s.replace(/[.@]/g, '-') : s
 
-// A YYYYMMDD suffix is an alias of the same model; any other numeric suffix is a
-// different version we must not collapse into.
+// A YYYYMMDD suffix is an alias; any other numeric suffix is a different version we must not collapse into.
 function suffixStartsWithNumericVersion(key: string, suffix: string): boolean {
   if (!/[0-9]$/.test(key)) return false
   if (suffix[0] !== '-' && suffix[0] !== '.') return false
@@ -164,8 +140,7 @@ function fuzzyFind(model: string): Price | undefined {
   let best: string | undefined
   for (const candidate of Object.keys(MERGED)) {
     if (!keyMatches(candidate, model, normModel)) continue
-    // Prefer the longest key (most specific); tie-break to the lexicographically
-    // smaller name, matching ccusage's resolution order.
+    // Prefer the longest (most specific) key; tie-break lexicographically, matching ccusage.
     if (
       best === undefined ||
       candidate.length > best.length ||
@@ -211,9 +186,7 @@ export function normalizeCodexModel(raw: string): string {
   return m
 }
 
-// Cost for `tokens` of one bucket. Anthropic bills tokens beyond 200k of context
-// at a higher marginal rate; absent a tier rate, the whole bucket is flat. Rates
-// are per-million, so divide once at the end.
+// One bucket's cost; tokens beyond 200k bill at the higher marginal rate when present. Rates are per-million.
 function tieredCost(tokens: number, rate: number, above: number | undefined): number {
   const THRESHOLD = 200_000
   if (tokens <= 0) return 0
@@ -222,8 +195,7 @@ function tieredCost(tokens: number, rate: number, above: number | undefined): nu
   return (tokens * rate) / 1e6
 }
 
-// Anthropic convention: input_tokens excludes cache reads/writes (they are
-// reported as separate counters). Total cost sums all four buckets.
+// Anthropic convention: input_tokens excludes cache reads/writes (separate counters); sum all four buckets.
 export function computeClaudeCost(model: string | null, t: Tokens): number | null {
   if (!model) return null
   const p = findPrice(normalizeClaudeModel(model))
@@ -238,8 +210,7 @@ export function computeClaudeCost(model: string | null, t: Tokens): number | nul
   )
 }
 
-// OpenAI convention: input_tokens already includes cached_input_tokens. Fresh
-// input is the difference; cached portion is billed at the discounted rate.
+// OpenAI convention: input_tokens includes cached_input_tokens; fresh input is the difference.
 export function computeCodexCost(model: string | null, t: Tokens): number | null {
   if (!model) return null
   const p = findPrice(normalizeCodexModel(model))

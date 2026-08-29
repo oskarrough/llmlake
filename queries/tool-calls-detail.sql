@@ -1,5 +1,4 @@
--- Tool-call deep dive #2: error rates, retry patterns, expensive tools.
--- Three small queries — run one at a time by uncommenting.
+-- Tool-call deep dive #2: error rates, retry patterns, expensive tools (three small queries — run one at a time by uncommenting).
 
 -- ── A. Error rate per (agent, model, tool) ───────────────────────────────
 -- Uses the parser-extracted is_error flag (claude block.is_error,

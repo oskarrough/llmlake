@@ -1,4 +1,4 @@
-// Shared terminal formatting for the collect/build/sync commands.
+// Shared terminal formatting for the collect/build/sync/status commands.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -6,13 +6,18 @@ export const RESET = '\x1b[0m'
 export const BOLD = '\x1b[1m'
 export const DIM = '\x1b[2m'
 
-export const bold = (s: string) => `${BOLD}${s}${RESET}`
-export const dim = (s: string) => `${DIM}${s}${RESET}`
+// status sets color from TTY/--color true; other commands keep the default (on).
+let colorEnabled = true
+export function setColorEnabled(v: boolean): void {
+  colorEnabled = v
+}
+export const paint = (code: string, s: string) => (colorEnabled ? code + s + RESET : s)
+export const bold = (s: string) => paint(BOLD, s)
+export const dim = (s: string) => paint(DIM, s)
 
 const repoRoot = join(import.meta.dir, '..')
 
-// Long absolute paths dominate the output and hide the numbers, so collapse the
-// two prefixes that show up in every line: the repo itself and $HOME.
+// Collapse the two prefixes in every path (repo, $HOME) — long paths hide the numbers.
 export function shortPath(p: string): string {
   const clean = p.replace(/\/+$/, '')
   if (clean === repoRoot) return '.'
@@ -23,8 +28,7 @@ export function shortPath(p: string): string {
   return clean
 }
 
-// `+12 -3`, and an explicit `0 new` when nothing moved — a dash or a blank
-// reads as "the command did nothing" rather than "nothing was left to do".
+// `+12 -3`, or an explicit `0 new` — a blank reads as "did nothing" rather than "nothing left to do".
 export function formatDelta(added: number, removed: number): string {
   if (!added && !removed) return '0 new'
   const parts: string[] = []
@@ -33,8 +37,7 @@ export function formatDelta(added: number, removed: number): string {
   return parts.join(' ')
 }
 
-// One row of the collect/sync tables: what moved, how much is there now, and
-// where it came from. Every row states a count, so a no-op run still reports.
+// One collect/sync table row: what moved, how much exists now, where from.
 export type TableRow = { label: string; delta: string; total: number; detail: string }
 
 export function renderRows(rows: TableRow[]): string[] {

@@ -1,5 +1,4 @@
-// Helpers for reporting how many session files (.jsonl) a run added or removed
-// from a directory.
+// Helpers for reporting how many session files (.jsonl) a run added or removed from a directory.
 import { existsSync, readdirSync } from 'node:fs'
 
 export function listSessions(dir: string): Set<string> {

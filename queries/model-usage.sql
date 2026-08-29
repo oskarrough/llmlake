@@ -1,5 +1,4 @@
--- Token volume and cost per (agent, model).
--- cost_usd: provider-recorded for pi, computed in parse-session for claude/codex.
+-- Token volume and cost per (agent, model); cost_usd is provider-recorded for pi, computed in parse-session for claude/codex.
 SELECT
   agent,
   model,

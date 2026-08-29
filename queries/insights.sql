@@ -1,7 +1,4 @@
--- Actionable findings about your agent sessions. Each branch computes one
--- heuristic and emits a row ONLY when it crosses a threshold worth acting on,
--- so a healthy lake returns nothing. `ord` orders them; `title` is the
--- headline (with the number), `detail` is the concrete fix.
+-- Actionable findings: each branch emits a row only when its heuristic crosses a threshold worth acting on (a healthy lake returns nothing); ord orders, title is the headline, detail is the concrete fix.
 WITH tc AS (
   SELECT agent, tool_call_id, lower(tool_name) AS t, tool_name, session_id, tool_input
   FROM scoped

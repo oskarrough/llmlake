@@ -1,12 +1,4 @@
--- Parser health dashboard. One check per row. Re-run after each parser fix.
--- Hypotheses are based on reading parse-session.ts and sampling raw JSONL.
---
--- HOW TO READ
---   check       : which anomaly
---   agent       : which parser to blame
---   n           : how many rows match (the metric to drive down — or up — with fixes)
---   example     : <source_file>:<source_line> to grep into for a sample
---   hypothesis  : likely cause + fix location
+-- Parser health dashboard, one check per row (re-run after each parser fix; hypotheses come from reading parse-session.ts and sampling raw JSONL). Columns: check = which anomaly, agent = which parser to blame, n = rows matching (the metric to drive down or up), example = <source_file>:<source_line> to grep, hypothesis = likely cause + fix location.
 
 WITH checks AS (
 

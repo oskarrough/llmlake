@@ -1,24 +1,11 @@
 #!/usr/bin/env bun
-// Refresh the embedded LiteLLM pricing snapshot used by pricing.ts.
-//
-// LiteLLM maintains a community price list covering hundreds of models across
-// providers. We mirror a filtered subset (only entries that have both an input
-// and output price, only the fields we actually bill on) into a committed JSON
-// file so pricing works offline and without a network call on every build. Run
-// this occasionally to pick up new models and price changes:
-//
-//   ./sync-pricing.ts
-//
-// The hardcoded table in pricing.ts always overrides this snapshot, so curated
-// values win and brand-new models can be priced before LiteLLM lists them.
+// Refresh the LiteLLM pricing snapshot mirrored into litellm-pricing.json (run occasionally: ./sync-pricing.ts). Only entries with both input+output prices and only billed fields are kept, so pricing works offline; the curated PRICING table in pricing.ts always overrides.
 import { join } from 'node:path'
 
 const URL =
   'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 
-// Only the per-token fields pricing.ts reads, plus the context limit. Anything
-// else (provider metadata, modalities, feature flags) is dropped to keep the
-// snapshot small.
+// Only the per-token fields pricing.ts reads, plus the context limit — the rest is dropped to keep the snapshot small.
 const KEEP = [
   'input_cost_per_token',
   'output_cost_per_token',
@@ -42,8 +29,7 @@ const out: Record<string, Record<string, number>> = {}
 for (const [model, value] of Object.entries(raw)) {
   if (typeof value !== 'object' || value === null) continue
   if (value.input_cost_per_token == null || value.output_cost_per_token == null) continue
-  // Drop Vertex aliases: they duplicate the canonical keys and roughly double
-  // the snapshot size. Our fuzzy matcher resolves vertex_ai/... names anyway.
+  // Drop Vertex aliases: they duplicate canonical keys; the fuzzy matcher resolves vertex_ai/… names anyway.
   if (model.includes('vertex_ai/')) continue
   const entry: Record<string, number> = {}
   for (const field of KEEP) {

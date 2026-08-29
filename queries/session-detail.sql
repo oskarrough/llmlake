@@ -1,5 +1,4 @@
--- Single-session deep dive. Edit the session_id below.
--- Run after `top-sessions.sql` to inspect an interesting one.
+-- Single-session deep dive: edit the session_id below (run after top-sessions.sql to pick an interesting one).
 WITH s AS (
   SELECT * FROM events
   WHERE session_id = 'PASTE_SESSION_ID_HERE'

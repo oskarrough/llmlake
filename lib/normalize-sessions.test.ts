@@ -19,10 +19,7 @@ async function seed(rel: string, body: string) {
   await writeFile(path, body)
 }
 
-// Regression: on case-insensitive filesystems (macOS, Dropbox) a mixed-case
-// encoded dir collides with its own lowercase canonical, so the old code merged
-// the dir into itself — deleting every session file and then crashing on the
-// recursion. It must instead case-rename and preserve the files.
+// Regression: on case-insensitive filesystems a mixed-case encoded dir collides with its own lowercase canonical, so the old code merged the dir into itself (deleting every session file); it must case-rename and preserve the files instead.
 test('lowercases a mixed-case encoded dir without losing files', async () => {
   await seed('claude/-Users-oskar-Sites-llmlake/a.jsonl', 'hello')
   await seed('claude/-Users-oskar-Sites-llmlake/b.jsonl', 'world')
@@ -40,9 +37,7 @@ test('lowercases a mixed-case encoded dir without losing files', async () => {
   expect(stats.removed).toBe(0)
 })
 
-// A genuine Dropbox "(case conflict)" fork is a separate physical dir (its name
-// differs by more than case), so it must still be merged, keeping the larger
-// append-only log.
+// A genuine Dropbox "(case conflict)" fork is a separate physical dir (differs by more than case), so it must still be merged, keeping the larger append-only log.
 test('merges a case-conflict fork, keeping the larger file', async () => {
   await seed('claude/-users-oskar-sites-arbe/s.jsonl', 'short')
   await seed('claude/-Users-oskar-Sites-arbe (case conflict 1)/s.jsonl', 'much-longer-content')
@@ -56,10 +51,7 @@ test('merges a case-conflict fork, keeping the larger file', async () => {
   )
 })
 
-// A sync "conflicted copy" (here Dropbox-style) is a duplicate file alongside its
-// original. It must be merged into the canonical name (keeping the larger log), not
-// left behind as a second session — and the apostrophe used to wedge the SQL that
-// builds the parquet.
+// A sync "conflicted copy" is a duplicate alongside its original; it must merge into the canonical name (keeping the larger log), not linger as a second session — and its apostrophe used to wedge the parquet SQL.
 test('merges a "conflicted copy" file into its canonical original', async () => {
   await seed('claude/-users-oskar-sites-arbe/s.jsonl', 'short')
   await seed(

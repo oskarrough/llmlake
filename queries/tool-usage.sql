@@ -1,5 +1,4 @@
--- What tools am I actually using, and how often do they error?
--- Error detection is best-effort: tool_output JSON containing "error"/"Error" or stop_reason='tool_error'.
+-- What tools am I actually using, and how often do they error? Error detection is best-effort: tool_output JSON containing "error"/"Error" or stop_reason='tool_error'.
 WITH t AS (
   SELECT
     agent,

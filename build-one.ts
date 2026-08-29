@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-// Parse one agent JSONL session into a normalized parquet file.
-// Usage: ./build-one.ts <session.jsonl> [out.parquet]
+// Parse one agent JSONL session into a normalized parquet file. Usage: ./build-one.ts <session.jsonl> [out.parquet]
 import { basename, dirname, join, relative } from 'node:path'
 import { mkdir, realpath } from 'node:fs/promises'
 import { AGENTS, buildCodexSessionIndex, colsSql, type Agent } from './parse-session.ts'

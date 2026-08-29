@@ -1,6 +1,4 @@
-// Shared duckdb-subprocess helpers. The project talks to the duckdb CLI
-// (already a prerequisite) rather than a native binding, so these wrap spawning
-// it: a version guard and a batch query runner.
+// Shared duckdb-subprocess helpers: a version guard and a batch query runner over the duckdb CLI (already a prerequisite).
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,12 +15,7 @@ export function ensureDuckdb(): void {
   }
 }
 
-// Run every query in a single duckdb process, returning each result's rows
-// keyed by the same id. `init` runs first (e.g. CREATE VIEW ...). Each result
-// is written to its own temp JSON file via COPY, then read back — there's no
-// stdout stream to parse. One process means any parquet is scanned once, and
-// the result files are a few KB. `.bail off` lets independent queries finish,
-// then missing or invalid result files identify the questions that failed.
+// Run every query in one duckdb process (`init` first, e.g. CREATE VIEW): each result is COPYd to its own temp JSON and read back (no stdout stream to parse). `.bail off` lets independent queries finish; missing result files identify the failures.
 export async function runQuestions(
   init: string,
   queries: Record<string, string>,

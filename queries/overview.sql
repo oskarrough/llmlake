@@ -1,6 +1,4 @@
--- At a glance: cost, activity, and cache efficiency for the period.
--- Reads from `scoped` (the period/agent/cwd-filtered view) so it works
--- unchanged from `./llmlake status` and `./llmlake query`.
+-- At a glance: cost, activity, and cache efficiency for the period. Reads FROM scoped so it works unchanged from ./llmlake status and ./llmlake query.
 SELECT
   round(sum(coalesce(cost_usd, 0)), 2)                          AS cost_usd,
   count(*) FILTER (WHERE event_type = 'tool_call')              AS tool_calls,

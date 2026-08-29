@@ -1,10 +1,7 @@
-// Shared rsync helper for the collect-*.ts scripts: copy *.jsonl (recursively)
-// from one or more source roots into data/sessions/<agent>/, then report what
-// changed. Collectors return a result instead of printing it, so collect.ts can
-// render every agent in one stable-ordered table (they run in parallel, so
-// self-printing collectors interleaved unpredictably).
+// Shared rsync helper for collect-*.ts: copy *.jsonl from source roots into data/sessions/<agent>/ and report what changed. Collectors return results so collect.ts renders one stable-ordered table (parallel collectors printing themselves would interleave).
 import { $ } from 'bun'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { diffCounts, listSessions } from './diff.ts'
 import { formatDelta, renderRows, type TableRow } from './ui.ts'
@@ -39,8 +36,9 @@ export function sessionsDir(agent: string): string {
   return join(import.meta.dir, '..', 'data/sessions', agent) + '/'
 }
 
-export function countSessions(dir: string): number {
-  return listSessions(dir).size
+// Expand a leading `~/` to the real home directory.
+export function expandHome(path: string): string {
+  return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
 }
 
 export async function collect(

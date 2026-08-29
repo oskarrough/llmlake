@@ -1,7 +1,4 @@
--- Cross-model tool-call behavior: where the improvement leverage is.
--- Five lenses, each as a small section. Comment/uncomment as you go.
---
--- NOTE: pi tool_calls are currently undercounted ~4× (see parser-sanity.sql).
+-- Cross-model tool-call behavior: where the improvement leverage is (five lenses, comment/uncomment as you go). NOTE: pi tool_calls are currently undercounted ~4× (see parser-sanity.sql).
 -- Numbers below are still useful for *ratios within an agent* but absolute
 -- pi tool_call counts will jump after the parser fix.
 

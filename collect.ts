@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
-// Run every collector, canonicalize the session tree so case/conflict variants
-// (e.g. macOS ~/Sites vs Linux ~/sites) don't pile up, then print one table.
-// Collectors run in parallel but are rendered in a fixed order.
+// Run every collector (parallel), canonicalize the session tree so case/conflict variants don't pile up, then print one fixed-order table.
 import { join } from 'node:path'
 import { collectClaude } from './collect-claude.ts'
 import { collectCodex } from './collect-codex.ts'

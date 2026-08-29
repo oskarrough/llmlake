@@ -1,15 +1,5 @@
 #!/usr/bin/env bun
-// Cursor stores chats in a single SQLite db (no JSONL on disk), so unlike the
-// rsync-based collectors this one reads the db and *emits* one slim JSONL file
-// per chat into data/sessions/cursor/, which parse-session.ts then maps to rows.
-//
-// Db: ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
-//   composerData:<id>           -> a chat. Message order is either inline in
-//                                  conversation[] (older) or in
-//                                  fullConversationHeadersOnly[] (newer).
-//   bubbleId:<composerId>:<id>  -> one message (type 1=user/2=assistant, text,
-//                                  modelInfo, tokenCount, toolFormerData, isThought)
-// The older `agentKv:` blobs (pre-composer chats, some binary) are skipped.
+// Cursor stores chats in one SQLite db (no JSONL on disk), so this collector reads it and emits one slim JSONL per chat into data/sessions/cursor/ for parse-session.ts. Db: ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb — composerData:<id> = a chat (order inline in conversation[] older, fullConversationHeadersOnly[] newer); bubbleId:<composerId>:<id> = one message (type 1=user/2=assistant, text, modelInfo, tokenCount, toolFormerData, isThought). Older agentKv: blobs are skipped.
 import { Database } from 'bun:sqlite'
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -34,8 +24,7 @@ type Bubble = {
   }
 }
 
-// Deepest shared directory across every file path referenced in the chat —
-// Cursor has no explicit cwd, but all selections sit under the workspace root.
+// Deepest shared dir across file paths referenced in the chat (Cursor has no explicit cwd; selections sit under the workspace root).
 function deriveCwd(raw: string): string | null {
   const paths = new Set<string>()
   for (const m of raw.matchAll(/"fsPath":\s*"((?:[^"\\]|\\.)+)"/g)) {
@@ -75,9 +64,7 @@ export async function collectCursor(): Promise<CollectResult> {
     }
   }
 
-  // Cursor keeps the db open (WAL), which can block opening it and also hide
-  // un-checkpointed writes. Snapshot the db + its -wal to temp and read that, so
-  // a running Cursor never trips us up.
+  // Cursor keeps the db open (WAL); snapshot db + -wal to temp and read that so a running Cursor never blocks us or hides writes.
   const tmp = mkdtempSync(join(tmpdir(), 'llmlake-cursor-'))
   const snap = join(tmp, 'state.vscdb')
   copyFileSync(dbPath, snap)
@@ -94,10 +81,7 @@ export async function collectCursor(): Promise<CollectResult> {
     )
     .all()
 
-  // Resolve a chat's messages in order. Newer chats keep only an ordered header
-  // list (fullConversationHeadersOnly) and store content in bubbleId rows; older
-  // chats inline the whole bubble in conversation[]. Try headers first, fall back
-  // to inline.
+  // Newer chats keep an ordered header list with content in bubbleId rows; older chats inline bubbles in conversation[]. Headers first, then inline.
   type Composer = {
     conversation?: (Bubble & { bubbleId?: string })[]
     fullConversationHeadersOnly?: { bubbleId?: string }[]
@@ -144,8 +128,7 @@ export async function collectCursor(): Promise<CollectResult> {
     const updated = comp.lastUpdatedAt ?? created
     const cwd = deriveCwd(value)
     const sessionModel = cleanModel(comp.modelConfig?.modelName)
-    // Bubbles carry no timestamp; spread synthetic ones across the chat's span so
-    // time-series queries work. Approximate but ordered.
+    // Bubbles carry no timestamp; spread synthetic ones across the chat's span (approximate but ordered).
     const span = created != null && updated != null && updated > created ? updated - created : 0
     const tsAt = (i: number): string | null =>
       created == null

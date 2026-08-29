@@ -1,14 +1,9 @@
-// Parse one JSONL line from a raw agent session (claude, pi, codex, hermes)
-// into a normalized Row in the llmlake schema. The driver supplies a
-// ParseContext (agent, source file path, mutable state carried across lines).
+// Parse one JSONL line from a raw agent session into a normalized Row in the llmlake schema; the driver supplies a ParseContext (agent, source path, mutable state carried across lines).
 import { basename, join, relative } from 'node:path'
 import { Option, Schema, SchemaAST } from 'effect'
 import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
-// Single source of truth for both the TypeScript `Row` type and the DuckDB
-// column-type map fed to read_json. Each field carries a duckdb annotation so
-// `COLUMNS` / `colsSql` are derived from the schema instead of maintained as
-// a parallel const.
+// Single source of truth for the `Row` type and the DuckDB column map: each field carries a duckdb annotation so COLUMNS/colsSql derive from the schema.
 
 const DuckdbTypeId = Symbol.for('llmlake/DuckdbType')
 
@@ -75,15 +70,11 @@ export const RowSchema = Schema.Struct({
   raw: JSON_,
 })
 
-// Schema.Struct fields are readonly in the inferred type, but the parsers
-// build a row by mutating fields after `baseRow`. Strip readonly here so the
-// working type lines up with the imperative parser style.
+// Schema.Struct infers readonly fields but parsers mutate rows after baseRow; strip readonly to match.
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 export type Row = Mutable<Schema.Schema.Type<typeof RowSchema>>
 
-// Walk the schema once at module load to extract column types — fails fast if
-// a field is missing its duckdb annotation, so the parquet writer is never fed
-// a row whose column type is unknown to DuckDB.
+// Walk the schema once at load; fails fast if a field lacks its duckdb annotation.
 const rowAst = RowSchema.ast
 if (rowAst._tag !== 'TypeLiteral') throw new Error('RowSchema must be a TypeLiteral')
 const getDuckdbType = SchemaAST.getAnnotation<string>(DuckdbTypeId)
@@ -122,8 +113,7 @@ const totalsEqual = (a: CodexTotals, b: CodexTotals) =>
   a.input === b.input && a.cached === b.cached && a.output === b.output
 const isZero = (t: CodexTotals) => t.input === 0 && t.cached === 0 && t.output === 0
 
-// Mutable cursor carried across a codex file's token_count events (and rebuilt
-// standalone when reading a fork parent). Lives on ParseState as `codexWalk`.
+// Mutable cursor carried across a codex file's token_count events (rebuilt standalone for fork parents); lives on ParseState as `codexWalk`.
 type CodexTokenWalk = {
   previousTotals: CodexTotals | null
   rawTotalsBaseline: CodexTotals | null
@@ -168,10 +158,7 @@ export type ParseState = {
   model: string | null
   provider: string | null
   is_subagent: boolean
-  // Claude subagents live in `<parent>/subagents/agent-*.jsonl` but their
-  // events carry the *parent's* sessionId. We mint a synthetic per-jsonl
-  // session_id so each subagent run is its own "session" in analytics.
-  // Set to the `agent-<suffix>` token on first row of a subagent file.
+  // Claude subagents live in `<parent>/subagents/agent-*.jsonl` but carry the parent's sessionId; we mint a synthetic `agent-<suffix>` session_id so each subagent run is its own session.
   subagent_suffix: string | null
   seenEventIds: Set<string>
   // Streaming assistant chunks share message.id + requestId; keep last per file.
@@ -540,18 +527,13 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   const usage = msg.usage ?? {}
   const content = msg.content
 
-  // Claude sometimes appends a subagent event twice to a subagent JSONL
-  // (same uuid, byte-identical line). Drop the second copy so per-session
-  // token/cost totals aren't inflated.
+  // Claude sometimes appends a subagent event twice (same uuid, byte-identical); drop the copy so per-session token/cost totals aren't inflated.
   if (typeof ev.uuid === 'string') {
     if (state.seenEventIds.has(ev.uuid)) return []
     state.seenEventIds.add(ev.uuid)
   }
 
-  // Detect subagent files once per session: `<parent>/subagents/agent-*.jsonl`.
-  // We mint a synthetic session_id `<parent>:<agent-suffix>` so each subagent
-  // run is its own session in analytics, and keep the real parent sessionId
-  // in parent_session_id for rollups.
+  // Mint a synthetic session_id `<parent>:<agent-suffix>` per subagent file; keep the real parent sessionId in parent_session_id for rollups.
   if (state.subagent_suffix == null) {
     state.subagent_suffix = ctx.sourceFile.match(/\/subagents\/(agent-[^/]+?)\.jsonl$/)?.[1] ?? null
   }
@@ -610,9 +592,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   }
   row.stop_reason = msg.stop_reason ?? null
   row.cwd = ev.cwd ?? state.cwd
-  // Claude's raw flag is `isSidechain`; we surface it under the unified
-  // `is_subagent` name. Subagent rows can be interleaved with main-thread
-  // rows inside the same file.
+  // Claude's raw flag is `isSidechain` (surfaced as is_subagent); subagent rows can be interleaved with main-thread rows in the same file.
   row.is_subagent = ev.isSidechain === true
 
   if (ev.type === 'user') row.event_type = 'user_message'
@@ -649,8 +629,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     if (row.is_error == null) row.is_error = false
   }
 
-  // Pure tool-call turns become tool_call; turns with text keep assistant_message/reasoning
-  // so role-based queries still see the message.
+  // Pure tool-call turns become tool_call; turns with text keep assistant_message/reasoning so role-based queries still see the message.
   if (row.event_type === 'assistant_message' && row.tool_name && !row.text) {
     row.event_type = 'tool_call'
   }
@@ -659,8 +638,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     row.cost_usd = computeClaudeCost(row.model, row)
   }
 
-  // If a 'reasoning' turn also carries a tool_use, emit a separate tool_call row
-  // so the result has a matching call. (Claude messages hold 0 or 1 tool_use blocks.)
+  // A 'reasoning' turn with a tool_use also emits a tool_call row so the result has a matching call (Claude messages hold 0-1 tool_use blocks).
   if (row.event_type === 'reasoning' && row.tool_call_id) {
     const sub = baseRow(ev, lineNo, ctx)
     sub.row_id = `${row.row_id}-tc`
@@ -742,8 +720,7 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
     row.event_type = 'tool_result'
   }
 
-  // Assistant turns can contain multiple toolCall blocks. Emit one tool_call row per block
-  // and keep the parent row (carrying tokens + thinking/text) only if there's something to keep.
+  // Assistant turns can hold multiple toolCall blocks: emit one tool_call row per block.
   const toolCalls: { name: string | null; id: string | null; input: unknown }[] = []
   if (role === 'assistant' && Array.isArray(content)) {
     for (const block of content) {
@@ -760,8 +737,7 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
   if (toolCalls.length === 0) return [row]
 
   const rows: Row[] = []
-  // Keep the parent row only when it has content of its own (text or thinking).
-  // If the assistant turn is tool-calls-only, the first tool_call carries the tokens.
+  // Keep the parent row only when it has text/thinking; a tool-calls-only turn puts its tokens on the first tool_call.
   const keepParent = !!text || hasThinking
   if (keepParent) rows.push(row)
 
@@ -781,8 +757,7 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
     sub.tool_name = tc.name
     sub.tool_call_id = tc.id
     sub.tool_input = tc.input
-    // Tokens belong to the message, not each block. Put them on the first emitted row
-    // when there's no parent row to carry them.
+    // Tokens belong to the message, not each block; put them on the first row when there's no parent to carry them.
     if (!keepParent && i === 0) {
       sub.input_tokens = row.input_tokens
       sub.output_tokens = row.output_tokens
@@ -810,9 +785,7 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
     if (p.id) state.session_id = p.id
     if (p.cwd) state.cwd = p.cwd
     if (p.model_provider) state.provider = p.model_provider
-    // Codex spawns subagent threads as separate sessions. session_meta carries
-    // source.subagent (and a forked_from_id) on spawned threads; apply that
-    // flag to every row in the file.
+    // Codex spawns subagent threads as separate sessions; session_meta carries source.subagent/forked_from_id, applied to every row in the file.
     if (p.source?.subagent != null || p.forked_from_id != null) {
       state.is_subagent = true
     }
@@ -871,10 +844,7 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
       row.event_type = 'tool_result'
       row.tool_call_id = p.call_id ?? null
       row.tool_output = maybeJson(p.output)
-      // Codex error signals:
-      //  - function_call_output: free-text "Process exited with code N"
-      //  - custom_tool_call_output: JSON-wrapped success {output, metadata:{exit_code}};
-      //    failures come through as a plain non-JSON string ("apply_patch verification failed: ...").
+      // Errors: function_call_output is free-text "Process exited with code N"; custom_tool_call_output is JSON with metadata.exit_code (a plain non-JSON string means failure).
       if (p.type === 'function_call_output' && typeof p.output === 'string') {
         const m = p.output.match(/Process exited with code (\d+)/)
         if (m) row.is_error = m[1] !== '0'
@@ -1006,13 +976,7 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
   return [row]
 }
 
-// Cursor lines are pre-normalized by collect-cursor.ts (it reads Cursor's
-// SQLite state.vscdb and emits one slim, role-tagged JSON object per line), so
-// this parser stays a thin role mapper. One `session_meta` line then one line
-// per chat bubble in conversation order: user/assistant text, `isThought`
-// reasoning, or a `tool` (toolFormerData) which fans out to tool_call +
-// tool_result. Timestamps are synthesized by the collector (Cursor bubbles
-// carry none) by interpolating between the composer's createdAt/lastUpdatedAt.
+// Cursor lines are pre-normalized by collect-cursor.ts (SQLite → slim role-tagged JSON), so this parser stays a thin role mapper: one session_meta, then one line per bubble; tool bubbles fan out to tool_call + tool_result; timestamps are collector-synthesized (Cursor bubbles carry none).
 function parseCursor(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
   const ev = JSON.parse(line)
@@ -1091,7 +1055,7 @@ export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row[
   return Array.isArray(result) ? result : [result]
 }
 
-/** Parse a full session file (lines without trailing empty split). */
+/** Build a ParseContext for one session file. */
 export function makeParseContext(
   agent: Agent,
   sourceFile: string,
@@ -1114,6 +1078,7 @@ export type ParseSessionOptions = {
   registerClaudeCrossFile?: boolean
 }
 
+/** Parse one full session's text into rows; empty split lines (incl. the trailing one) are ignored. */
 export async function parseSessionText(
   text: string,
   ctx: ParseContext,
@@ -1143,15 +1108,7 @@ export async function parseSessionText(
   return rows
 }
 
-// Pass 1 of the claude build: scan every claude session and record one usage
-// "winner" per (session, message, request) into `registry`, so finalize can
-// suppress the duplicate copies the same call leaves in resumed/subagent/
-// sidechain files (see registerClaudeCrossFileWinners / finalizeClaudeUsage).
-// Choosing a winner needs a global view, so this must read *all* claude files —
-// pure waste on a no-op build. So skip the whole pass unless at least one claude
-// file is stale; when anything is stale we rescan everything, since a winner in
-// an unchanged file can still suppress usage on a rebuilt one. Winners are
-// chosen by a total order, so scan order doesn't affect the result.
+// Claude build pass 1: pick one usage winner per (session, message, request) across all claude files so finalize suppresses duplicates from resumed/subagent/sidechain copies. Skipped unless some claude file is stale (then rescan all — a winner in an unchanged file can still suppress usage in a rebuilt one); winners follow a total order, so scan order doesn't matter.
 export async function populateClaudeCrossFile(
   registry: ClaudeCrossFileRegistry,
   sessionsRoot: string,

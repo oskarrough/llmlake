@@ -1,5 +1,4 @@
--- All-time activity per month, per agent.
--- Sessions, events, and total tokens (in + out) so claude/codex/pi are comparable.
+-- All-time activity per month, per agent: sessions, events, and total tokens (in + out) so claude/codex/pi are comparable.
 SELECT
   date_trunc('month', ts)               AS month,
   agent,

@@ -1,5 +1,4 @@
--- Which projects (cwd) cost the most? Shows the last two path segments so
--- "/Users/me/Sites/llmlake" reads as "Sites/llmlake".
+-- Which projects (cwd) cost the most? Shows the last two path segments so /Users/me/Sites/llmlake reads as Sites/llmlake.
 SELECT
   CASE
     WHEN cwd LIKE '%/%/%' THEN regexp_extract(cwd, '([^/]+/[^/]+)$')

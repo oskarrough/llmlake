@@ -1,18 +1,8 @@
 #!/usr/bin/env bun
-// `./llmlake status` — an instant, zero-AI terminal dashboard over the parquet
-// lake. Data flows in four stages, top to bottom in this file:
-//
-//   args/scope  →  views  →  runQuestions (duckdb)  →  renderers  →  main()
-//
-//   * scope      a `scoped` SQL view carrying --period/--agent/--cwd, so
-//                question SQL never has to template a WHERE clause.
-//   * questions  self-describing .sql files in queries/ that read FROM scoped
-//                and return rows. Adding one = drop in a .sql file.
-//   * views      pick question ids + a render hint each (see VIEWS).
-//   * renderers  pure: take rows, return lines. ANSI today; an HTML renderer
-//                could consume the same rows later.
+// `./llmlake status` — instant zero-AI terminal dashboard over the parquet lake: args/scope → views → runQuestions (duckdb) → renderers → main(). `scoped` carries --period/--agent/--cwd so question SQL never templates a WHERE; questions are self-describing .sql files in queries/ (adding one = drop in a file); views pick question ids + a render hint; renderers are pure rows → lines.
 import { join } from 'node:path'
 import { ensureDuckdb, runQuestions, type Row } from './lib/duck.ts'
+import { BOLD, DIM, paint, setColorEnabled } from './lib/ui.ts'
 
 const queriesDir = join(import.meta.dir, 'queries')
 const parquetGlob = join(import.meta.dir, 'data/parquet/**/*.parquet')
@@ -69,8 +59,7 @@ Examples:
 
 const sqlLit = (s: string) => s.replace(/'/g, "''")
 
-// Translate a --period value into a SQL predicate over `ts` and a label. Day
-// windows are calendar days ending today, so the daily panel shows N dated rows.
+// Day windows are calendar days ending today, so the daily panel shows N dated rows.
 function periodPredicate(p: string): { sql: string; label: string } {
   if (p === 'all') return { sql: 'TRUE', label: 'all time' }
   if (p === 'today') return { sql: 'ts >= current_date', label: 'today' }
@@ -162,9 +151,7 @@ const VIEWS: Record<string, Panel[]> = {
   compare: [byAgent], //              `./llmlake status compare`
 }
 
-// ── data: the views questions read from ─────────────────────────────────────
-// `scoped` carries the scope filter; questions read FROM it. Running the
-// queries is delegated to lib/duck.ts.
+// ── data: `scoped` carries the scope filter, questions read FROM it, queries run via lib/duck.ts ──
 function initSql(scope: Scope): string {
   return [
     `CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('${parquetGlob}', hive_partitioning=true, union_by_name=true);`,
@@ -172,14 +159,8 @@ function initSql(scope: Scope): string {
   ].join('\n')
 }
 
-// ── formatting helpers ──────────────────────────────────────────────────────
-const RESET = '\x1b[0m'
-const BOLD = '\x1b[1m'
-const DIM = '\x1b[2m'
+// ── formatting helpers (ANSI codes + painters come from lib/ui.ts) ─────────
 const fg = (r: number, g: number, b: number) => `\x1b[38;2;${r};${g};${b}m`
-
-let colorEnabled = true
-const paint = (code: string, s: string) => (colorEnabled ? code + s + RESET : s)
 
 // Blue → orange → red gradient, used for bars and panel titles.
 function gradient(t: number): string {
@@ -207,8 +188,7 @@ const TITLE_COLORS = [
 const RED = fg(255, 95, 95)
 const GREEN = fg(120, 220, 130)
 
-// duckdb emits some types (HUGEINT from sum(), DECIMAL) as JSON strings, so
-// coerce anything number-shaped before formatting.
+// duckdb emits some types (HUGEINT, DECIMAL) as JSON strings; coerce anything number-shaped before formatting.
 function toNum(v: unknown): number | null {
   if (typeof v === 'number') return v
   if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v)
@@ -311,8 +291,7 @@ function renderBars(rows: Row[], p: Extract<Panel, { render: 'bars' }>): string[
   })
 }
 
-// Findings teach you what to change: a colored headline + a wrapped tip. An
-// empty result means nothing crossed a threshold, so we say so explicitly.
+// Findings teach you what to change: headline + wrapped tip; an empty result means nothing crossed a threshold.
 function renderFindings(rows: Row[]): string[] {
   if (rows.length === 0) {
     return [paint(GREEN, '✓ Nothing stands out — your sessions look healthy for this period.')]
@@ -358,7 +337,7 @@ async function main() {
     process.stdout.write(HELP)
     return
   }
-  colorEnabled = process.stdout.isTTY || flags.color === 'true'
+  setColorEnabled(process.stdout.isTTY || flags.color === 'true')
 
   const panels = VIEWS[view]
   if (!panels) {

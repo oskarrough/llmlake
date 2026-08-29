@@ -1,6 +1,4 @@
--- Tool reliability: how often each tool is called and how often it errors.
--- Errors are matched by joining tool_call → tool_result within the same agent
--- and session, then checking is_error or an error marker in the output.
+-- Tool reliability: call and error rates per tool; errors matched by joining tool_call → tool_result within the same agent+session, then checking is_error or an error marker in the output.
 WITH calls AS (
   SELECT agent, session_id, tool_call_id, tool_name
   FROM scoped

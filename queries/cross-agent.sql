@@ -1,5 +1,4 @@
--- How do your agents compare? Cost, cache efficiency, and tool error rate per
--- agent — so you can see which agent is actually working well for you.
+-- How do your agents compare? Cost, cache efficiency, and tool error rate per agent.
 WITH agg AS (
   SELECT
     agent,

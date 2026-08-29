@@ -1,18 +1,9 @@
-// Agents name session dirs after their cwd (`/` → `-`), so filesystem casing
-// leaks in: macOS `-Users-osk-Sites-arbe` vs Linux `-users-osk-sites-arbe`.
-// Sync tools then fork duplicates that never reconverge: Dropbox makes
-// "(case conflict)" copies (case-insensitive FS) and "(<user>'s conflicted copy
-// <date>)" copies (same file edited on two machines). Left in place these parse
-// as extra sessions (double-counted tokens) and an apostrophe can wedge the
-// parquet build. This canonicalizes a tree to lowercase, conflict-free names;
-// the per-function comments below cover the merge mechanics.
+// Agents name session dirs after their cwd (`/` → `-`) so filesystem casing leaks in; sync tools then fork "(case conflict)" / "(…'s conflicted copy…)" duplicates that parse as extra sessions (double-counted tokens) and whose apostrophes can wedge the parquet build. This canonicalizes a tree to lowercase, conflict-free names.
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
-// Any parenthetical mentioning a conflict: "(case conflict)", "(case conflict 1)",
-// "(oskar's conflicted copy 2026-06-09)", etc. Agent session names are UUIDs, so
-// matching on the word "conflict" inside parens won't catch a legitimate name.
+// Parentheticals mentioning a conflict; agent session names are UUIDs, so "conflict" in parens can't be a legitimate name.
 const SYNC_CONFLICT = /\s*\([^)]*conflict[^)]*\)/gi
 
 function canonicalDir(name: string): string {
@@ -30,9 +21,7 @@ export interface NormalizeStats {
   removed: number
 }
 
-// True when two paths resolve to the same inode. On case-insensitive filesystems
-// `-Users-oskar` and `-users-oskar` are the SAME dir, so existsSync(canonical) is
-// a false positive — merging one into the other would delete its own contents.
+// True when two paths resolve to the same inode; on case-insensitive filesystems existsSync(canonical) alone is a false positive and merging would delete the dir's own contents.
 async function sameEntry(a: string, b: string): Promise<boolean> {
   try {
     const [sa, sb] = await Promise.all([stat(a), stat(b)])
@@ -42,8 +31,7 @@ async function sameEntry(a: string, b: string): Promise<boolean> {
   }
 }
 
-// Rename for case only (`-Users-oskar` → `-users-oskar`). A direct rename is a
-// no-op on case-insensitive filesystems (POSIX: same file), so go via a temp.
+// Case-only rename via a temp dir — a direct rename is a no-op on case-insensitive filesystems.
 async function caseRename(from: string, to: string) {
   const tmp = `${to}.normalize-tmp`
   await rm(tmp, { recursive: true, force: true })
@@ -108,10 +96,7 @@ async function normalizeChildren(dir: string, stats: NormalizeStats) {
   }
 }
 
-// Canonicalize a session tree in place (e.g. data/sessions or a sync dest).
-// Idempotent. Agent dirs keep their names; encoded-path dirs beneath them are
-// lowercased and sync-conflict variants ("(case conflict)", "(… conflicted
-// copy …)") are merged into the canonical entry.
+// Canonicalize a session tree in place (idempotent): agent dirs keep their names; encoded-path dirs beneath are lowercased and conflict variants merged into the canonical entry.
 export async function normalizeSessionTree(root: string): Promise<NormalizeStats> {
   const stats: NormalizeStats = { renamed: 0, merged: 0, removed: 0 }
   if (existsSync(root)) await normalizeChildren(root, stats)
