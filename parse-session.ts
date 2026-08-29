@@ -882,6 +882,30 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
   return row
 }
 
+// Hermes timestamps are timezone-naive local wall clock (filename wall clock matches); append the local UTC offset so TIMESTAMPTZ parsing keeps the wall time.
+function hermesTs(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  if (/[zZ]$/.test(v) || /[+-]\d{2}:?\d{2}$/.test(v)) return v
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
+  if (!m) return v
+  const [, y, mo, d, h, mi, s] = m
+  const off = -new Date(+y, +mo - 1, +d, +h, +mi, +s).getTimezoneOffset()
+  const sign = off >= 0 ? '+' : '-'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${v}${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
+}
+
+// Hermes tool results carry no native is_error; derive it from structured content (exit_code/error/success).
+function hermesIsError(content: unknown): boolean {
+  const j = maybeJson(content)
+  if (typeof j !== 'object' || j == null) return false
+  const o = j as Record<string, unknown>
+  if (typeof o.exit_code === 'number' && o.exit_code !== 0) return true
+  if (o.error) return true
+  if (o.success === false) return true
+  return false
+}
+
 function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
   const ev = parseJsonLine(line, lineNo, ctx)
@@ -908,7 +932,9 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
     for (const tc of toolCalls) {
       const fn = tc.function ?? {}
       const cr: Row = baseRow(ev, lineNo, ctx)
-      cr.ts = ev.timestamp ?? null
+      // Fan-out row: parent (if any) keeps the base row_id, calls get indexed suffixes.
+      cr.row_id = `${cr.row_id}-${callRows.length}`
+      cr.ts = hermesTs(ev.timestamp)
       cr.session_id = state.session_id
       cr.event_id = tc.id ?? tc.call_id ?? null
       cr.event_type = 'tool_call'
@@ -929,7 +955,7 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
 
     if (hasContent) {
       const parent: Row = baseRow(ev, lineNo, ctx)
-      parent.ts = ev.timestamp ?? null
+      parent.ts = hermesTs(ev.timestamp)
       parent.session_id = state.session_id
       parent.event_type = thinking ? 'reasoning' : 'assistant_message'
       parent.role = 'assistant'
@@ -946,9 +972,9 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
   // --- tool result lines ---
   if (ev.role === 'tool') {
     const row: Row = baseRow(ev, lineNo, ctx)
-    row.ts = ev.timestamp ?? null
+    row.ts = hermesTs(ev.timestamp)
     row.session_id = state.session_id
-    row.event_id = ev.tool_call_id ?? null
+    row.event_id = ev.tool_call_id != null ? `${ev.tool_call_id}:result` : null
     row.event_type = 'tool_result'
     row.role = 'tool'
     row.model = state.model
@@ -957,15 +983,15 @@ function parseHermes(line: string, lineNo: number, ctx: ParseContext): Row[] {
     row.tool_name = ev.name ?? null
     row.tool_call_id = ev.tool_call_id ?? null
     row.tool_output = maybeJson(ev.content)
-    // Hermes doesn't ship is_error on tool lines; absent = success
-    row.is_error = false
+    // No native is_error; derive from structured content (exit_code/error/success).
+    row.is_error = hermesIsError(ev.content)
     return [row]
   }
 
   // --- user lines ---
   const content = typeof ev.content === 'string' ? ev.content : null
   const row = baseRow(ev, lineNo, ctx)
-  row.ts = ev.timestamp ?? null
+  row.ts = hermesTs(ev.timestamp)
   row.session_id = state.session_id
   row.event_type = 'user_message'
   row.role = 'user'
@@ -1019,6 +1045,7 @@ function parseCursor(line: string, lineNo: number, ctx: ParseContext): Row[] {
     if (tool.result == null) return [call]
     const result = baseRow(ev, lineNo, ctx)
     result.ts = ev.ts ?? null
+    result.row_id = `${result.row_id}-result`
     result.event_id = tool.callId ? `${tool.callId}:result` : null
     result.parent_id = tool.callId ?? null
     result.event_type = 'tool_result'
