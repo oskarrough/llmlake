@@ -34,6 +34,7 @@ const EVENT_TYPES = [
   'session_meta',
   'usage',
   'compacted',
+  'subagent',
   'other',
 ] as const
 const EventTypeSchema = Schema.Literal(...EVENT_TYPES).pipe(duckdb('VARCHAR'))
@@ -488,22 +489,15 @@ function baseRow(ev: unknown, lineNo: number, ctx: ParseContext): Row {
   }
 }
 
-const CLAUDE_META_TYPES = new Set([
-  'attachment',
-  'system',
-  'summary',
-  'permission-mode',
-  'last-prompt',
-  'file-history-snapshot',
-  'progress',
-  'agent-setting',
-  'ai-title',
-  'queue-operation',
-  'agent-name',
-  'custom-title',
-  'bridge-session',
-  'worktree-state',
-])
+// Claude housekeeping line types → session_meta (cost-state carries cumulative counters only; never extracted as cost).
+const CLAUDE_META_TYPES = new Set(
+  (
+    'attachment system summary permission-mode last-prompt file-history-snapshot progress agent-setting ' +
+    'ai-title queue-operation agent-name custom-title bridge-session worktree-state ' +
+    'mode atis-latch file-history-delta pr-link frame-link cost-state ' +
+    'artifact-autoreact-ledger artifact-comment-monitor fork-context-ref'
+  ).split(' '),
+)
 
 function parseJsonLine(line: string, lineNo: number, ctx: ParseContext): any {
   try {
@@ -683,6 +677,11 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   return rows
 }
 
+// session/model-level pi lines that are pure housekeeping (plannotator state dumps join them below).
+const PI_META_TYPES = new Set(
+  'session model_change thinking_level_change session_info label'.split(' '),
+)
+
 function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
   const { state } = ctx
   const ev = parseJsonLine(line, lineNo, ctx)
@@ -724,8 +723,17 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
   row.stop_reason = msg.stopReason ?? msg.stop_reason ?? null
   row.cwd = ev.cwd ?? state.cwd
 
-  if (ev.type === 'session' || ev.type === 'model_change' || ev.type === 'thinking_level_change') {
+  if (PI_META_TYPES.has(ev.type) || (ev.type === 'custom' && ev.customType === 'plannotator')) {
     row.event_type = 'session_meta'
+    if (ev.type === 'session_info' || ev.type === 'label') row.text = ev.name ?? ev.label ?? null
+  } else if (ev.type === 'compaction') {
+    row.event_type = 'compacted'
+    row.text = ev.summary ?? null
+  } else if (ev.type === 'custom' || ev.type === 'custom_message') {
+    // Subagent run records / notifications carry their own lifecycle; plannotator state dumps are housekeeping (above).
+    row.event_type = 'subagent'
+    if (ev.type === 'custom') row.is_error = ev.data?.status === 'error'
+    row.text = ev.content ?? ev.data?.error ?? ev.data?.result ?? ev.data?.description ?? null
   } else if (ev.type === 'message') {
     if (role === 'user') row.event_type = 'user_message'
     else if (role === 'assistant') row.event_type = hasThinking ? 'reasoning' : 'assistant_message'
@@ -738,6 +746,17 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
     row.tool_output = maybeJson(content)
     if (typeof msg.isError === 'boolean') row.is_error = msg.isError
     row.event_type = 'tool_result'
+  }
+
+  // pi's own bash executions: one tool_result with command/output, no synthetic tool_call to pair with.
+  if (role === 'bashExecution') {
+    row.event_type = 'tool_result'
+    row.role = 'tool'
+    row.tool_name = 'bash'
+    row.tool_input = { command: msg.command ?? null }
+    row.tool_output = maybeJson(msg.output)
+    row.is_error = msg.cancelled === true || msg.exitCode > 0
+    return [row]
   }
 
   // Assistant turns can hold multiple toolCall blocks: emit one tool_call row per block.
@@ -777,6 +796,7 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
     sub.tool_name = tc.name
     sub.tool_call_id = tc.id
     sub.tool_input = tc.input
+    sub.stop_reason = row.stop_reason
     // Tokens belong to the message, not each block; put them on the first row when there's no parent to carry them.
     if (!keepParent && i === 0) {
       sub.input_tokens = row.input_tokens
@@ -784,7 +804,6 @@ function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
       sub.cache_read_tokens = row.cache_read_tokens
       sub.cache_write_tokens = row.cache_write_tokens
       sub.cost_usd = row.cost_usd
-      sub.stop_reason = row.stop_reason
     }
     rows.push(sub)
   }
@@ -820,8 +839,18 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
   const row = baseRow(ev, lineNo, ctx)
   row.ts = ev.timestamp ?? null
 
-  if (ev.type === 'session_meta' || ev.type === 'turn_context') {
+  if (
+    ['session_meta', 'turn_context', 'world_state', 'inter_agent_communication_metadata'].includes(
+      ev.type,
+    )
+  ) {
     row.event_type = 'session_meta'
+  } else if (ev.type === 'realtime_item') {
+    if (p.type === 'transcript_segment') {
+      row.event_type = p.role === 'user' ? 'user_message' : 'assistant_message'
+      row.role = normalizeRole(p.role)
+      row.text = typeof p.text === 'string' ? p.text : null
+    } else row.event_type = 'session_meta'
   } else if (ev.type === 'compacted') {
     row.event_type = 'compacted'
     if (typeof p.message === 'string') row.text = p.message
@@ -848,22 +877,36 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
   } else if (ev.type === 'response_item') {
     row.role = normalizeRole(p.role)
 
-    if (p.type === 'message') {
-      row.event_type = row.role === 'assistant' ? 'assistant_message' : 'user_message'
+    if (p.type === 'message' || p.type === 'agent_message') {
+      // agent_message is inter-agent (subagent) comms; plain text blocks surface, encrypted blobs stay in raw.
+      row.event_type =
+        p.type === 'agent_message'
+          ? 'subagent'
+          : row.role === 'assistant'
+            ? 'assistant_message'
+            : 'user_message'
       if (Array.isArray(p.content)) {
         const texts: string[] = []
         for (const b of p.content) if (typeof b?.text === 'string') texts.push(b.text)
         if (texts.length) row.text = texts.join('\n')
       }
-    } else if (p.type === 'function_call' || p.type === 'custom_tool_call') {
+    } else if (
+      p.type === 'function_call' ||
+      p.type === 'custom_tool_call' ||
+      p.type === 'tool_search_call'
+    ) {
       row.event_type = 'tool_call'
-      row.tool_name = p.name ?? null
+      row.tool_name = p.name ?? (p.type === 'tool_search_call' ? 'tool_search' : null)
       row.tool_call_id = p.call_id ?? null
       row.tool_input = maybeJson(p.arguments ?? p.input)
-    } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
+    } else if (
+      p.type === 'function_call_output' ||
+      p.type === 'custom_tool_call_output' ||
+      p.type === 'tool_search_output'
+    ) {
       row.event_type = 'tool_result'
       row.tool_call_id = p.call_id ?? null
-      row.tool_output = maybeJson(p.output)
+      row.tool_output = maybeJson(p.output ?? p.tools)
       // Errors: function_call_output is free-text "Process exited with code N"; custom_tool_call_output is JSON with metadata.exit_code (a plain non-JSON string means failure).
       if (p.type === 'function_call_output' && typeof p.output === 'string') {
         const m = p.output.match(/Process exited with code (\d+)/)

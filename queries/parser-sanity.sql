@@ -51,16 +51,16 @@ WITH checks AS (
 
   UNION ALL
 
-  -- INVARIANT: a tool_call should be answered by a tool_result (excluding aborts).
+  -- INVARIANT: a tool_call should be answered by a tool_result (excluding abort/error turns).
   -- Trailing un-answered calls at session-end are natural; this fires when many pile up.
-  SELECT 'all: orphan tool_call (call without result, not aborted)',
+  SELECT 'all: orphan tool_call (call without result, abort/error turns excluded)',
          e.agent,
          count(*),
          any_value(e.source_file || ':' || e.source_line),
-         'Tool_call with no matching tool_result and stop_reason != ''aborted''. A few are natural (last call in unfinished session); many = a parser regression on the result side.'
+         'Tool_call with no matching tool_result and stop_reason not in (''aborted'', ''error''). A small residual can be naturally unfinished (last call of an ended session); many = a parser regression on the result side.'
   FROM events e
   WHERE e.event_type = 'tool_call' AND e.tool_call_id IS NOT NULL
-    AND coalesce(e.stop_reason, '') NOT IN ('aborted')
+    AND coalesce(e.stop_reason, '') NOT IN ('aborted', 'error')
     AND NOT EXISTS (
       SELECT 1 FROM events r
       WHERE r.session_id = e.session_id

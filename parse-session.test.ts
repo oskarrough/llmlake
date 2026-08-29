@@ -169,6 +169,201 @@ function claudeCtx(sourceFile = 'claude/session.jsonl') {
   return makeParseContext('claude', sourceFile, '/sessions', new Map())
 }
 
+function piCtx(sourceFile = 'pi/session.jsonl') {
+  return makeParseContext('pi', sourceFile, '/sessions', new Map())
+}
+
+function codexCtx() {
+  return makeParseContext(
+    'codex',
+    'codex/rollout-11111111-1111-4111-8111-111111111111.jsonl',
+    '/sessions',
+    new Map(),
+  )
+}
+
+test('claude known housekeeping raw types all map to session_meta, never carry cost', async () => {
+  const raws = [
+    { type: 'mode', mode: 'normal' },
+    { type: 'atis-latch', atis: '' },
+    { type: 'file-history-delta', messageId: 'm1' },
+    { type: 'pr-link', prNumber: 1, prUrl: 'x' },
+    { type: 'frame-link', path: '/p', frameUrl: 'u' },
+    { type: 'cost-state', totalCostUSD: 4.99, totalDuration: 100 },
+    { type: 'artifact-autoreact-ledger', artifacts: {} },
+    { type: 'artifact-comment-monitor', artifacts: {} },
+    { type: 'fork-context-ref', parentSessionId: 's1' },
+  ]
+  const rows = await parseSessionText(jsonl(raws), claudeCtx())
+
+  expect(rows.map((r) => r.event_type)).toEqual(raws.map(() => 'session_meta'))
+  // cost-state carries cumulative counters: cost must stay null, not be extracted.
+  expect(rows[5]!.cost_usd).toBeNull()
+  expect(new Set(rows.map((r) => r.row_id)).size).toBe(raws.length)
+})
+
+test('codex housekeeping/lifecycle → session_meta; transcript_segment, agent_message and tool_search get explicit types', async () => {
+  const raws = [
+    { type: 'world_state', payload: { full: true, state: {} } },
+    { type: 'inter_agent_communication_metadata', payload: { trigger_turn: true } },
+    { type: 'realtime_item', payload: { type: 'realtime_session_started', id: 'r1' } },
+    { type: 'realtime_item', payload: { type: 'transcript_segment', role: 'user', text: 'hello' } },
+    {
+      type: 'realtime_item',
+      payload: { type: 'transcript_segment', role: 'assistant', text: 'hi there' },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'agent_message',
+        author: '/root',
+        recipient: '/root/worker',
+        content: [
+          { type: 'input_text', text: 'NEW_TASK do X' },
+          { type: 'encrypted_content', encrypted_content: 'gAAAA' },
+        ],
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'tool_search_call',
+        id: 'tsc1',
+        call_id: 'call_tsc1',
+        arguments: { query: 'linear issues' },
+      },
+    },
+    {
+      type: 'response_item',
+      payload: { type: 'tool_search_output', call_id: 'call_tsc1', tools: [{ name: 'a' }] },
+    },
+  ]
+  const rows = await parseSessionText(jsonl(raws), codexCtx())
+  const byRaw = (i: number) => rows.filter((r) => r.source_line === i + 1)
+
+  expect(byRaw(0).map((r) => r.event_type)).toEqual(['session_meta'])
+  expect(byRaw(1).map((r) => r.event_type)).toEqual(['session_meta'])
+  expect(byRaw(2).map((r) => r.event_type)).toEqual(['session_meta'])
+  expect(byRaw(3).map((r) => r.event_type)).toEqual(['user_message'])
+  expect(byRaw(3)[0]!.text).toBe('hello')
+  expect(byRaw(4).map((r) => r.event_type)).toEqual(['assistant_message'])
+  expect(byRaw(4)[0]!.text).toBe('hi there')
+  expect(byRaw(5).map((r) => r.event_type)).toEqual(['subagent'])
+  // Only plain input_text is surfaced; encrypted blobs stay in raw.
+  expect(byRaw(5)[0]!.text).toBe('NEW_TASK do X')
+  // tool_search_call/output pair like any call/result.
+  const call = byRaw(6).find((r) => r.event_type === 'tool_call')!
+  const result = byRaw(7).find((r) => r.event_type === 'tool_result')!
+  expect(call.tool_name).toBe('tool_search')
+  expect(call.tool_call_id).toBe('call_tsc1')
+  expect(call.tool_input).toEqual({ query: 'linear issues' })
+  expect(result.tool_call_id).toBe('call_tsc1')
+  expect(result.tool_output).toEqual([{ name: 'a' }])
+})
+
+test('pi custom/session_info/label/compaction/bashExecution get explicit event types', async () => {
+  const raws = [
+    {
+      type: 'custom',
+      customType: 'subagents:record',
+      id: 'c1',
+      data: { id: 's1', status: 'error', description: 'Find code', error: 'usage limit' },
+    },
+    {
+      type: 'custom',
+      customType: 'subagents:record',
+      id: 'c2',
+      data: { id: 's2', status: 'completed', description: 'Summarize', result: 'done well' },
+    },
+    { type: 'custom_message', customType: 'subagent-notification', id: 'c3', content: 'task done' },
+    { type: 'custom', customType: 'plannotator', id: 'c4', data: { phase: 'idle' } },
+    { type: 'session_info', id: 'si1', name: 'my-session-name' },
+    { type: 'label', id: 'l1', label: 'START HERE' },
+    { type: 'compaction', id: 'cp1', summary: 'summary so far' },
+  ]
+  const rows = await parseSessionText(jsonl(raws), piCtx())
+  const byRaw = (i: number) => rows.filter((r) => r.source_line === i + 1)
+
+  expect(byRaw(0).map((r) => r.event_type)).toEqual(['subagent'])
+  expect(byRaw(0)[0]!.is_error).toBe(true)
+  expect(byRaw(0)[0]!.text).toBe('usage limit')
+  expect(byRaw(1)[0]!.event_type).toBe('subagent')
+  expect(byRaw(1)[0]!.is_error).toBe(false)
+  expect(byRaw(1)[0]!.text).toBe('done well')
+  expect(byRaw(2)[0]!.event_type).toBe('subagent')
+  expect(byRaw(2)[0]!.text).toBe('task done')
+  expect(byRaw(3)[0]!.event_type).toBe('session_meta')
+  expect(byRaw(4)[0]!.event_type).toBe('session_meta')
+  expect(byRaw(4)[0]!.text).toBe('my-session-name')
+  expect(byRaw(5)[0]!.event_type).toBe('session_meta')
+  expect(byRaw(5)[0]!.text).toBe('START HERE')
+  expect(byRaw(6)[0]!.event_type).toBe('compacted')
+  expect(byRaw(6)[0]!.text).toBe('summary so far')
+})
+
+test('pi bashExecution is ONE tool_result with command/output and exit/cancel error, no synthetic call id', async () => {
+  const mk = (id: string, msg: Record<string, unknown>) => ({
+    type: 'message',
+    id,
+    message: { role: 'bashExecution', ...msg },
+  })
+  const text = jsonl([
+    mk('b1', { command: 'bun test', output: 'ok', exitCode: 0, cancelled: false }),
+    mk('b2', { command: 'bun lint', output: 'boom', exitCode: 2, cancelled: false }),
+    mk('b3', { command: 'bun watch', output: 'partial', cancelled: true }),
+    mk('b4', { command: 'bun x', output: 'fine' }),
+  ])
+  const rows = await parseSessionText(text, piCtx())
+
+  expect(rows.map((r) => r.event_type)).toEqual([
+    'tool_result',
+    'tool_result',
+    'tool_result',
+    'tool_result',
+  ])
+  expect(rows.map((r) => r.role)).toEqual(['tool', 'tool', 'tool', 'tool'])
+  expect(rows.map((r) => r.tool_name)).toEqual(['bash', 'bash', 'bash', 'bash'])
+  expect(rows.map((r) => r.tool_input)).toEqual([
+    { command: 'bun test' },
+    { command: 'bun lint' },
+    { command: 'bun watch' },
+    { command: 'bun x' },
+  ])
+  expect(rows.map((r) => r.is_error)).toEqual([false, true, true, false])
+  // No synthetic tool_call/id: rows must not pair as results of an invented call.
+  expect(rows.map((r) => r.tool_call_id)).toEqual([null, null, null, null])
+  expect(rows.map((r) => r.event_id)).toEqual(['b1', 'b2', 'b3', 'b4'])
+})
+
+test('pi split tool_call rows inherit the parent message stop_reason (aborted stays visible)', async () => {
+  const text = jsonl([
+    { type: 'session', id: 's1' },
+    {
+      type: 'message',
+      id: 'm1',
+      message: {
+        role: 'assistant',
+        stopReason: 'aborted',
+        content: [
+          { type: 'text', text: 'Running the thing' },
+          { type: 'toolCall', id: 'tc1', name: 'Bash', arguments: { cmd: 'x' } },
+        ],
+        usage: { input: 10, output: 5 },
+      },
+    },
+  ])
+  const rows = await parseSessionText(text, piCtx())
+  const parent = rows.find((r) => r.event_type === 'assistant_message')!
+  const call = rows.find((r) => r.event_type === 'tool_call')!
+
+  expect(parent.stop_reason).toBe('aborted')
+  expect(call.stop_reason).toBe('aborted')
+  expect(call.tool_call_id).toBe('tc1')
+  // Tokens stay on the parent only.
+  expect(parent.input_tokens).toBe(10)
+  expect(call.input_tokens).toBeNull()
+})
+
 test('claude text+tool_use: parent keeps message and usage, call is a suffixed split that pairs', async () => {
   const text = jsonl([
     {
