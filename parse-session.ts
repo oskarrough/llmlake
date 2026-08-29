@@ -538,6 +538,19 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     state.subagent_suffix = ctx.sourceFile.match(/\/subagents\/(agent-[^/]+?)\.jsonl$/)?.[1] ?? null
   }
 
+  // Workflow journals (subagents/workflows/wf_*/journal.jsonl) carry no sessionId/timestamp: mint a per-wf synthetic session from the path; lifecycle lines are session_meta, raw preserved.
+  const wfJournal = ctx.sourceFile.match(
+    /([^/]+)\/subagents\/workflows\/(wf_[^/]+)\/journal\.jsonl$/,
+  )
+  if (wfJournal && wfJournal[1] && wfJournal[2]) {
+    state.parent_session_id = wfJournal[1]
+    state.session_id = `${wfJournal[1]}:${wfJournal[2]}`
+    state.is_subagent = true
+    const row = baseRow(ev, lineNo, ctx)
+    row.event_type = 'session_meta'
+    return row
+  }
+
   const rawSessionId =
     ev.sessionId ??
     state.parent_session_id ??
@@ -599,6 +612,7 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
   else if (ev.type === 'assistant') row.event_type = 'assistant_message'
   else if (CLAUDE_META_TYPES.has(ev.type)) row.event_type = 'session_meta'
 
+  const toolUses: { name: string | null; id: string | null; input: unknown }[] = []
   if (typeof content === 'string') {
     row.text = content
   } else if (Array.isArray(content)) {
@@ -609,9 +623,11 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
         texts.push(block.thinking)
         row.event_type = 'reasoning'
       } else if (block?.type === 'tool_use') {
-        row.tool_name ??= block.name ?? null
-        row.tool_call_id ??= block.id ?? null
-        row.tool_input ??= maybeJson(block.input)
+        toolUses.push({
+          name: block.name ?? null,
+          id: block.id ?? null,
+          input: maybeJson(block.input),
+        })
       } else if (block?.type === 'tool_result') {
         row.tool_call_id ??= block.tool_use_id ?? null
         row.tool_output ??= maybeJson(block.content)
@@ -629,38 +645,42 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     if (row.is_error == null) row.is_error = false
   }
 
-  // Pure tool-call turns become tool_call; turns with text keep assistant_message/reasoning so role-based queries still see the message.
-  if (row.event_type === 'assistant_message' && row.tool_name && !row.text) {
-    row.event_type = 'tool_call'
-  }
-
   if (row.input_tokens != null || row.output_tokens != null) {
     row.cost_usd = computeClaudeCost(row.model, row)
   }
 
-  // A 'reasoning' turn with a tool_use also emits a tool_call row so the result has a matching call (Claude messages hold 0-1 tool_use blocks).
-  if (row.event_type === 'reasoning' && row.tool_call_id) {
+  // Calls-only turns become tool_call on the base row (keeping usage/cost); turns with text keep assistant_message/reasoning and emit every call as a deterministically suffixed split row.
+  if (
+    !toolUses.length ||
+    (row.event_type !== 'assistant_message' && row.event_type !== 'reasoning')
+  ) {
+    return row
+  }
+  const onBase = row.event_type === 'assistant_message' && !row.text
+  if (onBase) {
+    row.event_type = 'tool_call'
+    row.tool_name = toolUses[0]!.name
+    row.tool_call_id = toolUses[0]!.id
+    row.tool_input = toolUses[0]!.input
+  }
+  const rows: Row[] = [row]
+  for (let i = onBase ? 1 : 0; i < toolUses.length; i++) {
+    const t = toolUses[i]!
     const sub = baseRow(ev, lineNo, ctx)
-    sub.row_id = `${row.row_id}-tc`
+    sub.row_id = `${row.row_id}-tc${i}`
     sub.ts = row.ts
-    sub.session_id = row.session_id
-    sub.event_id = row.event_id ? `${row.event_id}-tc` : null
+    sub.event_id = row.event_id ? `${row.event_id}-tc${i}` : null
     sub.parent_id = row.event_id ?? row.parent_id
     sub.role = row.role
     sub.model = row.model
-    sub.provider = row.provider
-    sub.cwd = row.cwd
     sub.is_subagent = row.is_subagent
     sub.event_type = 'tool_call'
-    sub.tool_name = row.tool_name
-    sub.tool_call_id = row.tool_call_id
-    sub.tool_input = row.tool_input
-    row.tool_name = null
-    row.tool_call_id = null
-    row.tool_input = null
-    return [row, sub]
+    sub.tool_name = t.name
+    sub.tool_call_id = t.id
+    sub.tool_input = t.input
+    rows.push(sub)
   }
-  return row
+  return rows
 }
 
 function parsePi(line: string, lineNo: number, ctx: ParseContext): Row[] {
@@ -888,8 +908,7 @@ function hermesTs(v: unknown): string | null {
   if (/[zZ]$/.test(v) || /[+-]\d{2}:?\d{2}$/.test(v)) return v
   const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
   if (!m) return v
-  const [, y, mo, d, h, mi, s] = m
-  const off = -new Date(+y, +mo - 1, +d, +h, +mi, +s).getTimezoneOffset()
+  const off = -new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!).getTimezoneOffset()
   const sign = off >= 0 ? '+' : '-'
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${v}${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
