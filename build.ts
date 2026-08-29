@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
-// Build parquet for every collected JSONL session under data/sessions/.
-// Skips files whose output parquet is newer than the source jsonl.
-//
-// Each concurrent worker owns one long-lived `duckdb` process and one temp
-// JSON file. For each source: parse → write temp JSON → send `COPY ... TO ...`
-// over duckdb's stdin → wait for a `.print <marker>` sentinel on stdout.
-// Reusing the duckdb process amortizes its startup across all files in a run.
+// Build parquet for every collected JSONL session under data/sessions/. Skips files whose parquet is newer than the source; a global stamp records the transformation-code hash and forces a full rebuild when it changes; orphaned parquet is pruned after.
+// Each worker owns one long-lived duckdb process + temp JSON file: parse → write JSON → COPY via stdin → wait for a `.print` sentinel on stdout; reusing the process amortizes startup.
+import { createHash } from 'node:crypto'
 import { dirname, join, relative } from 'node:path'
 import { mkdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -42,14 +38,36 @@ function outPathFor(agent: Agent, src: string): string {
   return join(parquetRoot, `agent=${agent}`, rel)
 }
 
+// Hash the files that decide what rows a source produces; when their hash differs from the stamp left by the last successful build, ignore source mtimes and rebuild everything. A missing stamp (first build) is stale too.
+const stampPath = join(parquetRoot, 'build.stamp')
+const codeHash = await (async () => {
+  const hash = createHash('sha256')
+  for (const rel of [
+    'build.ts',
+    'parse-session.ts',
+    'pricing.ts',
+    'litellm-pricing.json',
+    'lib/build-session.ts',
+  ]) {
+    hash.update(rel)
+    hash.update(new Uint8Array(await Bun.file(join(import.meta.dir, rel)).arrayBuffer()))
+  }
+  return hash.digest('hex')
+})()
+const codeStale =
+  (
+    await Bun.file(stampPath)
+      .text()
+      .catch(() => '')
+  ).trim() !== codeHash
+
 async function needsRebuild(src: string, agent: Agent): Promise<boolean> {
+  if (codeStale) return true
   const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(outPathFor(agent, src))])
   return !(srcM != null && outM != null && outM >= srcM)
 }
 
-// Claude writes the same usage record into multiple files (resumed sessions,
-// subagents, sidechains); this registers one winner per usage key so the build
-// counts each call once. Skipped entirely when no claude file is stale.
+// Claude writes the same usage record into multiple files (resumed/subagent/sidechain); this registers one winner per usage key so the build counts each call once. Skipped when no claude file is stale.
 await populateClaudeCrossFile(claudeCrossFile, root, codexSessionIndex, (src) =>
   needsRebuild(src, 'claude'),
 )
@@ -79,10 +97,7 @@ class DuckdbWorker {
   async copy(rows: Row[], out: string): Promise<void> {
     await Bun.write(this.tmpJson, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     const marker = `__llmlake_done_${++this.seq}__`
-    // Paths are interpolated into SQL string literals; any single quote closes
-    // the literal early, so duckdb never reaches `.print` and the marker read
-    // below blocks forever. Double them. (Dropbox "conflicted copy" paths like
-    // `…(r's conflicted copy).parquet` are the usual source of an apostrophe.)
+    // A single quote in a path closes the SQL literal early and hangs the marker read forever; double them (Dropbox "conflicted copy" names are the usual source).
     const sqlStr = (s: string) => s.replaceAll("'", "''")
     await this.proc.stdin.write(
       `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', columns={${colsSql}})) ` +
@@ -95,6 +110,8 @@ class DuckdbWorker {
       this.buffer += this.decoder.decode(value, { stream: true })
     }
     this.buffer = this.buffer.slice(this.buffer.indexOf(marker) + marker.length)
+    // duckdb prints the marker even after a failed COPY (the error went to stderr); verify the file landed.
+    if (!(await Bun.file(out).exists())) throw new Error(`duckdb failed to write ${out}`)
   }
 
   async close(): Promise<void> {
@@ -110,6 +127,8 @@ for await (const f of new Bun.Glob('**/*.jsonl').scan({ cwd: root, absolute: tru
 const envC = process.env.BUILD_CONCURRENCY ? Number(process.env.BUILD_CONCURRENCY) : null
 const concurrency =
   envC && envC > 0 ? envC : Math.max(2, Math.min(16, navigator.hardwareConcurrency ?? 4))
+
+if (codeStale) console.log(dim('transformation code changed — rebuilding all outputs'))
 
 let built = 0
 let skipped = 0
@@ -130,9 +149,7 @@ async function workerLoop(id: number) {
         const rel = relative(root, src)
         const agent = rel.split(/[\\/]/)[0] as Agent
         if (!AGENTS.includes(agent)) {
-          // Not a parse failure — a file under an unrecognized top-level dir
-          // (e.g. a stray `sessions/` folder from a misconfigured sync). Track
-          // these separately so they can't masquerade as parse errors.
+          // Not a parse failure — a file under an unrecognized top-level dir; tracked separately so it can't masquerade as a parse error.
           unknownDirs.add(agent)
           unknown++
           continue
@@ -144,6 +161,10 @@ async function workerLoop(id: number) {
         const out = outPathFor(agent, src)
         const rows = await parseFile(src, agent)
         await mkdir(dirname(out), { recursive: true })
+        // Raw is authoritative: drop any stale output first so a failed COPY can't leave an old parquet behind and look successful. Only ENOENT is ignorable; e.g. an unwritable dir must fail the build so the marker isn't advanced over a stale output.
+        await unlink(out).catch((e) => {
+          if ((e as { code?: string }).code !== 'ENOENT') throw e
+        })
         worker ??= new DuckdbWorker(id)
         await worker.copy(rows, out)
         built++
@@ -167,11 +188,38 @@ if (unknown) {
   )
 }
 
+await mkdir(parquetRoot, { recursive: true })
+// data/sessions is the source of truth: delete parquet with no matching source jsonl (deleted or renamed source, or an unknown agent dir). An empty scan may mean an unavailable archive — keep the cache.
+const expected = new Set<string>()
+for (const src of files) {
+  const agent = relative(root, src).split(/[\\/]/)[0]
+  if (agent && (AGENTS as readonly string[]).includes(agent))
+    expected.add(outPathFor(agent as Agent, src))
+}
+let pruned = 0
+if (files.length) {
+  for await (const path of new Bun.Glob('**/*.parquet').scan({
+    cwd: parquetRoot,
+    absolute: true,
+    onlyFiles: true,
+  })) {
+    if (!expected.has(path)) {
+      await unlink(path)
+      pruned++
+    }
+  }
+} else {
+  console.warn('warning: no source sessions found — keeping existing parquet')
+}
+// Advance the stamp only after a fully successful run so a failed build is retried in full next time.
+if (!errors) await Bun.write(stampPath, codeHash)
+
 console.log(bold('build'))
 console.log(
   `  ${plural(built, 'file')} built  ${dim(
     [
       `${skipped} unchanged`,
+      `${pruned} pruned`,
       ...(errors ? [`${errors} failed`] : []),
       ...(unknown ? [`${unknown} ignored`] : []),
       `${files.length} total`,
