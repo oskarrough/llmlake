@@ -1,21 +1,24 @@
 -- Actionable findings: each branch emits a row only when its heuristic crosses a threshold worth acting on (a healthy lake returns nothing); ord orders, title is the headline, detail is the concrete fix.
 WITH tc AS (
-  SELECT agent, tool_call_id, lower(tool_name) AS t, tool_name, session_id, tool_input
+  -- DISTINCT collapses replay dups (codex forks re-emit same call); different tool_input survives.
+  SELECT DISTINCT agent, tool_call_id, lower(tool_name) AS t, tool_name, session_id, tool_input
   FROM scoped
   WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
 ),
 results AS (
+  -- one row per key (bool_or, same error semantics): a replayed key cannot fan the join out.
   SELECT
     agent,
     session_id,
     tool_call_id,
-    (
+    bool_or(
       coalesce(is_error, false)
       OR tool_output::VARCHAR ILIKE '%"is_error":true%'
       OR tool_output::VARCHAR ILIKE '%"error"%'
     ) AS err
   FROM scoped
   WHERE event_type = 'tool_result' AND tool_call_id IS NOT NULL
+  GROUP BY 1, 2, 3
 ),
 tool_err AS (
   SELECT tc.tool_name, count(*) AS n, count(*) FILTER (WHERE r.err) AS errs

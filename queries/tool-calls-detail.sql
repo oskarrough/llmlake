@@ -4,12 +4,15 @@
 -- Uses the parser-extracted is_error flag (claude block.is_error,
 -- pi message.isError, codex exit code / metadata).
 WITH calls AS (
-  SELECT agent, session_id, model, tool_name, tool_call_id
+  -- DISTINCT collapses replay dups (codex forks re-emit same call).
+  SELECT DISTINCT agent, session_id, model, tool_name, tool_call_id
   FROM events WHERE event_type='tool_call' AND model IS NOT NULL
 ),
 results AS (
-  SELECT agent, session_id, tool_call_id, is_error
+  -- one row per key: bool_or(is_error) true iff any copy errored (NULL stays NULL); prevents fan-out.
+  SELECT agent, session_id, tool_call_id, bool_or(is_error) AS is_error
   FROM events WHERE event_type='tool_result'
+  GROUP BY 1, 2, 3
 )
 SELECT
   c.agent, c.model, c.tool_name,

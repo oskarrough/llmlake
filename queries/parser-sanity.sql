@@ -1,6 +1,10 @@
 -- Parser health dashboard, one check per row (re-run after each parser fix; hypotheses come from reading parse-session.ts and sampling raw JSONL). Columns: check = which anomaly, agent = which parser to blame, n = rows matching (the metric to drive down or up), example = <source_file>:<source_line> to grep, hypothesis = likely cause + fix location.
 
-WITH checks AS (
+-- Source-inherent orphan-call allowance (baseline 2026-08-29: reports/2026-08-29-status-and-parser-findings.md); unlisted agents strict via coalesce(0); pi kept tight.
+WITH allowance (agent, allowed) AS (
+  VALUES ('cursor', 230), ('claude', 35), ('codex', 25), ('pi', 16)
+),
+checks AS (
 
   -- pi: meta events tagged 'other' (model_change / thinking_level_change)
   SELECT 'pi: any other-tagged rows' AS check,
@@ -51,14 +55,14 @@ WITH checks AS (
 
   UNION ALL
 
-  -- INVARIANT: a tool_call should be answered by a tool_result (excluding abort/error turns).
-  -- Trailing un-answered calls at session-end are natural; this fires when many pile up.
-  SELECT 'all: orphan tool_call (call without result, abort/error turns excluded)',
+  -- SOURCE-INHERENT guardrail (healthy = 0 rows): a trip means residual grew past allowance — re-sample raw JSONL before touching the parser.
+  SELECT 'all: orphan tool_call above baseline allowance (source-inherent)',
          e.agent,
          count(*),
          any_value(e.source_file || ':' || e.source_line),
-         'Tool_call with no matching tool_result and stop_reason not in (''aborted'', ''error''). A small residual can be naturally unfinished (last call of an ended session); many = a parser regression on the result side.'
+         'Orphan tool_calls (no matching tool_result, stop_reason not aborted/error) exceeded this agent''s baseline allowance. Expected small residual; growth = source change or a parser regression on the result side. Re-sample raw JSONL first.'
   FROM events e
+  LEFT JOIN allowance a ON a.agent = e.agent
   WHERE e.event_type = 'tool_call' AND e.tool_call_id IS NOT NULL
     AND coalesce(e.stop_reason, '') NOT IN ('aborted', 'error')
     AND NOT EXISTS (
@@ -68,8 +72,8 @@ WITH checks AS (
         AND r.event_type = 'tool_result'
         AND r.tool_call_id = e.tool_call_id
     )
-  GROUP BY e.agent
-  HAVING count(*) > 5
+  GROUP BY e.agent, a.allowed
+  HAVING count(*) > coalesce(a.allowed, 0)
 
   UNION ALL
 
