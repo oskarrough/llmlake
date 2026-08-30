@@ -182,6 +182,25 @@ checks AS (
 
   UNION ALL
 
+  -- hermes: ts must keep the wall clock baked into the filename. hermesTs appends
+  -- the PRODUCER_TZ offset so TIMESTAMPTZ preserves wall time; filenames embed the
+  -- session-start wall clock (minute drift is normal, a date/hour shift is not).
+  SELECT 'hermes: ts wall clock != filename wall clock',
+         'hermes',
+         count(*),
+         any_value(source_file),
+         'Mismatch means the offset baking broke or a naive timestamp fell through bare (e.g. an unhandled format) and was cast under the wrong tz assumption. Check hermesTs in parse-session.ts.'
+  FROM (
+    SELECT source_file, min(ts) AS first_ts
+    FROM events
+    WHERE agent = 'hermes' AND ts IS NOT NULL
+    GROUP BY source_file
+  )
+  WHERE regexp_matches(source_file, '/\d{8}_\d{6}_')
+    AND strftime(first_ts AT TIME ZONE 'Europe/Berlin', '%Y%m%d_%H') != regexp_extract(source_file, '\d{8}_\d{2}', 0)
+
+  UNION ALL
+
   -- INVARIANT: a tool_call needs an id so the result can pair
   SELECT 'all: tool_call without tool_call_id',
          agent,

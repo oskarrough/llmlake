@@ -135,8 +135,8 @@ test('hermes naive timestamp keeps local wall clock with an appended offset (inc
     const ts = row.ts!
     // Raw string preserved verbatim, exactly one UTC offset appended.
     expect(ts).toMatch(/^2026-05-10T09:54:57\.709482[+-]\d{2}:\d{2}$/)
-    // The appended offset yields the correct local instant for the wall-clock components.
-    expect(Date.parse(ts)).toBe(new Date(2026, 4, 10, 9, 54, 57, 709).getTime())
+    // The appended offset (CEST, +02:00 in May) yields the correct instant for the wall clock — TZ-independent, unlike the old parser+assertion pair which both used the process tz.
+    expect(Date.parse(ts)).toBe(Date.parse('2026-05-10T09:54:57.709482+02:00'))
   }
   // The regression must cover the tool_result branch, not just user/assistant rows.
   expect(rows.find((r) => r.event_type === 'tool_result')).toBeDefined()
@@ -496,6 +496,31 @@ test('claude workflow journal: session/parent ids from path, session_meta, is_su
     expect(row.is_subagent).toBe(true)
   }
   expect(new Set(rows.map((r) => r.row_id)).size).toBe(2)
+})
+
+test('hermesTs: naive wall-clock timestamps get the PRODUCER_TZ offset (DST-correct), known formats all covered', async () => {
+  const parse = (ts: unknown) =>
+    parseSessionText(
+      jsonl([
+        { role: 'session_meta', model: 'm', platform: 'p' },
+        { role: 'user', content: 'hi', timestamp: ts },
+      ]),
+      hermesCtx(),
+    )
+
+  // Summer = CEST (+02:00), winter = CET (+01:00) — offset must follow DST, not a constant.
+  expect((await parse('2026-07-10T09:55:00.100200'))[0]!.ts).toBe(
+    '2026-07-10T09:55:00.100200+02:00',
+  )
+  expect((await parse('2026-01-10T09:55:00'))[0]!.ts).toBe('2026-01-10T09:55:00+01:00')
+  // Space separator and missing seconds used to fall through bare — now stamped too.
+  expect((await parse('2026-07-10 09:55:00'))[0]!.ts).toBe('2026-07-10 09:55:00+02:00')
+  expect((await parse('2026-07-10T09:55'))[0]!.ts).toBe('2026-07-10T09:55+02:00')
+  // Already-explicit offsets pass through untouched.
+  expect((await parse('2026-07-10T09:55:00Z'))[0]!.ts).toBe('2026-07-10T09:55:00Z')
+  expect((await parse('2026-07-10T09:55:00-05:30'))[0]!.ts).toBe('2026-07-10T09:55:00-05:30')
+  // Unparseable shapes stay bare rather than getting a mangled suffix.
+  expect((await parse('2026-07-10'))[0]!.ts).toBe('2026-07-10')
 })
 
 for (const { agent, sourceFile, lines } of cases) {

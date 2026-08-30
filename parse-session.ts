@@ -945,16 +945,26 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
   return row
 }
 
-// Hermes timestamps are timezone-naive local wall clock (filename wall clock matches); append the local UTC offset so TIMESTAMPTZ parsing keeps the wall time.
+// All machines that write Hermes session files share one timezone; name it here so the
+// appended offset is machine-independent (same input → same parquet no matter where the import runs).
+const PRODUCER_TZ = 'Europe/Berlin'
+
+// Hermes timestamps are timezone-naive local wall clock in PRODUCER_TZ (filename wall clock matches); append that zone's UTC offset so TIMESTAMPTZ parsing keeps the wall time.
 function hermesTs(v: unknown): string | null {
   if (typeof v !== 'string') return null
   if (/[zZ]$/.test(v) || /[+-]\d{2}:?\d{2}$/.test(v)) return v
-  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
+  const m = v.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::(\d{2}))?(?:\.\d+)?$/)
   if (!m) return v
-  const off = -new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!).getTimezoneOffset()
-  const sign = off >= 0 ? '+' : '-'
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${v}${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
+  // DST-correct offset of PRODUCER_TZ at this wall-clock instant: interpret the wall
+  // clock as UTC, then read the zone's longOffset back off that instant.
+  const instant = new Date(`${m[1]}T${m[2]}:${m[3] ?? '00'}Z`)
+  const gmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: PRODUCER_TZ,
+    timeZoneName: 'longOffset',
+  })
+    .formatToParts(instant)
+    .find((p) => p.type === 'timeZoneName')!.value // "GMT+02:00" | "GMT-05:30" | "GMT"
+  return `${v}${gmt === 'GMT' ? '+00:00' : gmt.slice(3)}`
 }
 
 // Hermes tool results carry no native is_error; derive it from structured content (exit_code/error/success).
