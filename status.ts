@@ -60,14 +60,16 @@ Examples:
 
 const sqlLit = (s: string) => s.replace(/'/g, "''")
 
-// Day windows are calendar days ending today, so the daily panel shows N dated rows.
+// Day windows are calendar days ending now (future-dated events excluded); 'all' stays unbounded.
 function periodPredicate(p: string): { sql: string; label: string } {
+  const bounded = ' AND ts <= current_timestamp'
   if (p === 'all') return { sql: 'TRUE', label: 'all time' }
-  if (p === 'today') return { sql: 'ts >= current_date', label: 'today' }
-  if (p === 'month') return { sql: "ts >= date_trunc('month', current_date)", label: 'this month' }
+  if (p === 'today') return { sql: 'ts >= current_date' + bounded, label: 'today' }
+  if (p === 'month')
+    return { sql: `ts >= date_trunc('month', current_date)` + bounded, label: 'this month' }
   const n = Number(p.match(/^(\d+)d?$/)?.[1] ?? 7)
   return {
-    sql: `ts >= current_date - INTERVAL ${n - 1} DAY`,
+    sql: `ts >= current_date - INTERVAL ${n - 1} DAY` + bounded,
     label: n === 1 ? 'today' : `last ${n} days`,
   }
 }
@@ -118,7 +120,7 @@ const VIEWS: Record<string, Panel[]> = {
       title: 'Daily Activity',
       render: 'bars',
       label: 'day',
-      value: 'cost_usd',
+      value: 'estimated_value_usd',
       extra: ['calls'],
     },
     {
@@ -126,7 +128,7 @@ const VIEWS: Record<string, Panel[]> = {
       title: 'By Project',
       render: 'bars',
       label: 'project',
-      value: 'cost_usd',
+      value: 'estimated_value_usd',
       extra: ['sessions'],
     },
     {
@@ -134,7 +136,7 @@ const VIEWS: Record<string, Panel[]> = {
       title: 'By Model',
       render: 'bars',
       label: 'model',
-      value: 'cost_usd',
+      value: 'estimated_value_usd',
       extra: ['events'],
     },
     {
@@ -261,9 +263,11 @@ function renderHeader(rows: Row[]): string[] {
   const r = rows[0] ?? {}
   const num = (k: string) => toNum(r[k]) ?? 0
   const stat = (v: string, label: string) => paint(BOLD, v) + ' ' + paint(DIM, label)
+  // Optional `estimated_value_usd_label` ('sub'/'unpriced') replaces the numeric estimate.
+  const value = cell(r.estimated_value_usd_label) || fmtCost(num('estimated_value_usd'))
   return [
     [
-      stat(fmtCost(num('cost_usd')), 'cost'),
+      stat(value, 'est. value'),
       stat(humanInt(num('tool_calls')), 'calls'),
       stat(humanInt(num('sessions')), 'sessions'),
       stat((num('cache_hit_pct') || 0) + '%', 'cache hit'),
@@ -284,12 +288,16 @@ function renderBars(rows: Row[], p: Extract<Panel, { render: 'bars' }>): string[
   const vals = rows.map((r) => toNum(r[p.value]) ?? 0)
   const max = Math.max(1, ...vals)
   const labelW = Math.min(24, Math.max(...rows.map((r) => cell(r[p.label]).length)))
-  const valW = Math.max(...vals.map((v) => fmtValue(p.value, v).length))
+  // Optional `<value>_label` (e.g. 'sub') replaces the numeric display; the number still scales the bar.
+  const shown = rows.map((r, i) => cell(r[`${p.value}_label`]) || fmtValue(p.value, vals[i]!))
+  const valW = Math.max(...shown.map((s) => s.length))
   return rows.map((r, i) => {
     const label = cell(r[p.label]).slice(0, labelW).padEnd(labelW)
-    const val = fmtValue(p.value, vals[i]).padStart(valW)
-    const extras = (p.extra ?? []).map((k) => paint(DIM, fmtValue(k, r[k]))).join('  ')
-    return `${bar(vals[i]! / max)} ${label}  ${paint(BOLD, val)}${extras ? '  ' + extras : ''}`
+    // pct extras already render with '%'; every other extra gets its key as an explicit suffix.
+    const extras = (p.extra ?? [])
+      .map((k) => paint(DIM, fmtValue(k, r[k]) + (k.includes('pct') ? '' : ` ${k}`)))
+      .join('  ')
+    return `${bar(vals[i]! / max)} ${label}  ${paint(BOLD, shown[i]!.padStart(valW))}${extras ? '  ' + extras : ''}`
   })
 }
 

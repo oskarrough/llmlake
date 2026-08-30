@@ -52,6 +52,11 @@ activity, model, task-mix, tool-reliability and per-agent breakdowns.
 ./llmlake status compare                 # cross-agent comparison
 ```
 
+The overview reports the four token buckets the parsers emit — **input**, **output**,
+**cache read** (prompt tokens re-served from the provider's cache) and **cache write**
+(tokens sent to populate that cache). There is no generic token total. Cache hit is
+`cache_read / (input + cache_read)`: the share of the prompt that never had to be re-sent.
+
 Under the hood it's just SQL: each panel is a question file in `queries/`,
 and a `view` lists which questions to show. So a new metric is a new `.sql`
 file, and the layout lives in `status.ts`.
