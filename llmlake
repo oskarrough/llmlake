@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")"
+# Resolve through symlinks so `llmlake` works from anywhere (e.g. ~/.local/bin).
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+cd "$(dirname "$SCRIPT")"
 ROOT="$(pwd)"
 source "$ROOT/lib/freshness.sh"
 
 if [[ $# -eq 0 ]]; then
   cat <<'EOF'
-Usage: ./llmlake <command>
+Usage: llmlake <command>
 
 Commands:
   collect  Copy local LLM session logs into ./data/sessions
@@ -15,16 +17,16 @@ Commands:
   query    Query the parquet data with duckdb
 
 Examples:
-  ./llmlake collect
-  ./llmlake sync ~/Dropbox/Apps/llmlake/sessions
-  ./llmlake build
-  ./llmlake status --period 30d --agent claude
-  ./llmlake query -c "SELECT count(*) FROM events;"
+  llmlake collect
+  llmlake sync ~/Dropbox/Apps/llmlake/sessions
+  llmlake build
+  llmlake status --period 30d --agent claude
+  llmlake query -c "SELECT count(*) FROM events;"
 EOF
   exit 0
 fi
 
-[[ "$1" == "query" ]] && exec ./query "${@:2}"
+[[ "$1" == "query" ]] && exec "$ROOT/query" "${@:2}"
 if [[ "$1" == "status" ]]; then
   for arg in "${@:2}"; do
     [[ "$arg" == "--help" || "$arg" == "-h" ]] && exec bun run "$1.ts" "${@:2}"
