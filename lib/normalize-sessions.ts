@@ -6,7 +6,8 @@ import { join } from 'node:path'
 // Parentheticals mentioning a conflict; agent session names are UUIDs, so "conflict" in parens can't be a legitimate name.
 const SYNC_CONFLICT = /\s*\([^)]*conflict[^)]*\)/gi
 
-function canonicalDir(name: string): string {
+// Exported so collect can write source dirs straight to their canonical names; otherwise rsync re-copies a mixed-case dir every run after this module lowercases it away.
+export function canonicalDir(name: string): string {
   const c = name.replace(SYNC_CONFLICT, '')
   return c.startsWith('-') ? c.toLowerCase() : c
 }

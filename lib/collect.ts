@@ -1,9 +1,11 @@
 // Shared rsync helper for collect-*.ts: copy *.jsonl from source roots into data/sessions/<agent>/ and report what changed. Collectors return results so collect.ts renders one stable-ordered table (parallel collectors printing themselves would interleave).
 import { $ } from 'bun'
 import { existsSync } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { diffCounts, listSessions } from './diff.ts'
+import { canonicalDir } from './normalize-sessions.ts'
 import { formatDelta, renderRows, type TableRow } from './ui.ts'
 
 export type CollectResult = {
@@ -41,6 +43,17 @@ export function expandHome(path: string): string {
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
 }
 
+// Copy *.jsonl from src into dst. Top-level dirs land under their canonical (lowercased, conflict-free) name so the tree is already normalized and a repeat run is a no-op; rsync itself can't rename on the way in.
+async function syncTree(src: string, dst: string) {
+  await $`rsync -a --include='*.jsonl' --exclude='*' ${src} ${dst}`
+  for (const ent of await readdir(src, { withFileTypes: true })) {
+    if (!ent.isDirectory()) continue
+    const to = join(dst, canonicalDir(ent.name), '/')
+    await $`mkdir -p ${to}`
+    await $`rsync -a --include='*/' --include='*.jsonl' --exclude='*' ${join(src, ent.name, '/')} ${to}`
+  }
+}
+
 export async function collect(
   agent: string,
   dstRoot: string,
@@ -55,7 +68,7 @@ export async function collect(
       continue
     }
     await $`mkdir -p ${dst}`
-    await $`rsync -a --include='*/' --include='*.jsonl' --exclude='*' ${src} ${dst}`
+    await syncTree(src, dst)
     used.push(label ?? src)
   }
   if (used.length === 0) {
