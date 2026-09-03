@@ -1,4 +1,4 @@
--- Tool reliability: call and error rates per tool; errors matched by joining tool_call → tool_result within the same agent+session, then checking is_error or an error marker in the output.
+-- Tool reliability: call and error rates per tool (names case-folded so claude's Bash and pi's bash count as one tool); errors matched by joining tool_call → tool_result within the same agent+session, then checking is_error or an error marker in the output.
 WITH calls AS (
   -- DISTINCT collapses replay dups (codex forks re-emit same call); different payload survives.
   SELECT DISTINCT agent, session_id, tool_call_id, tool_name
@@ -21,12 +21,12 @@ results AS (
   GROUP BY 1, 2, 3
 )
 SELECT
-  c.tool_name,
+  mode(c.tool_name)                                                AS tool_name, -- most common spelling
   count(*)                                                         AS calls,
   count(*) FILTER (WHERE r.err)                                    AS errors,
   round(100.0 * count(*) FILTER (WHERE r.err) / nullif(count(r.tool_call_id), 0), 1) AS error_pct
 FROM calls c
 LEFT JOIN results r USING (agent, session_id, tool_call_id)
-GROUP BY 1
+GROUP BY lower(c.tool_name)
 ORDER BY calls DESC
 LIMIT 12;

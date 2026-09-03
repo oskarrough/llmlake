@@ -217,8 +217,15 @@ function humanTok(n: number): string {
 }
 
 function fmtCost(n: number): string {
+  if (n === 0) return '$0'
   const dp = n >= 1 ? 2 : n >= 0.01 ? 3 : 4
   return '$' + n.toFixed(dp)
+}
+
+// A `<col>_label` ('sub', 'unpriced', …) qualifies the number rather than hiding it: a subscription row still shows its API-equivalent estimate. A zero value shows the label alone.
+function withLabel(label: string, n: number, col: string): string {
+  if (!label) return fmtValue(col, n)
+  return n > 0 ? `${fmtValue(col, n)} ${label}` : label
 }
 
 // Format a numeric cell based on its column name; non-numbers pass through.
@@ -264,7 +271,11 @@ function renderHeader(rows: Row[]): string[] {
   const num = (k: string) => toNum(r[k]) ?? 0
   const stat = (v: string, label: string) => paint(BOLD, v) + ' ' + paint(DIM, label)
   // Optional `estimated_value_usd_label` ('sub'/'unpriced') replaces the numeric estimate.
-  const value = cell(r.estimated_value_usd_label) || fmtCost(num('estimated_value_usd'))
+  const value = withLabel(
+    cell(r.estimated_value_usd_label),
+    num('estimated_value_usd'),
+    'estimated_value_usd',
+  )
   return [
     [
       stat(value, 'est. value'),
@@ -287,9 +298,9 @@ function renderHeader(rows: Row[]): string[] {
 function renderBars(rows: Row[], p: Extract<Panel, { render: 'bars' }>): string[] {
   const vals = rows.map((r) => toNum(r[p.value]) ?? 0)
   const max = Math.max(1, ...vals)
-  const labelW = Math.min(24, Math.max(...rows.map((r) => cell(r[p.label]).length)))
+  const labelW = Math.min(34, Math.max(...rows.map((r) => cell(r[p.label]).length)))
   // Optional `<value>_label` (e.g. 'sub') replaces the numeric display; the number still scales the bar.
-  const shown = rows.map((r, i) => cell(r[`${p.value}_label`]) || fmtValue(p.value, vals[i]!))
+  const shown = rows.map((r, i) => withLabel(cell(r[`${p.value}_label`]), vals[i]!, p.value))
   const valW = Math.max(...shown.map((s) => s.length))
   return rows.map((r, i) => {
     const label = cell(r[p.label]).slice(0, labelW).padEnd(labelW)

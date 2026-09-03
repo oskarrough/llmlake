@@ -14,7 +14,11 @@ export type Price = {
 }
 
 export const PRICING: Record<string, Price> = {
-  // Anthropic
+  // Anthropic (first-party API rates; Fable cache reads are $0.25/M, others default to 0.1× input)
+  'claude-fable-5-1': { input: 10.0, output: 50.0, cache_read: 0.25 },
+  'claude-fable-5': { input: 10.0, output: 50.0 },
+  'claude-opus-5': { input: 5.0, output: 25.0 },
+  'claude-sonnet-5': { input: 2.0, output: 10.0 },
   'claude-haiku-4-5-20251001': { input: 1.0, output: 5.0 },
   'claude-haiku-4-5': { input: 1.0, output: 5.0 },
   'claude-opus-4-5-20251101': { input: 5.0, output: 25.0 },
