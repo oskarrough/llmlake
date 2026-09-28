@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from 'bun:test'
 import { makeParseContext, parseSessionText, type Agent } from './parse-session.ts'
+import { stripInlineImages } from './lib/build-session.ts'
 
 const cases: { agent: Agent; sourceFile: string; lines: unknown[] }[] = [
   {
@@ -541,3 +542,22 @@ for (const { agent, sourceFile, lines } of cases) {
     }
   })
 }
+
+test('large inline base64 images collapse to a size stub, nested and in strings', () => {
+  const b64 = 'A'.repeat(200_000)
+  const out = stripInlineImages({
+    raw: { output: [{ image_url: `data:image/png;base64,${b64}` }] },
+    tool_output: `before data:image/jpeg;base64,${b64}== after`,
+    n: 3,
+  })
+  expect(out).toEqual({
+    raw: { output: [{ image_url: '[image/png 0.2 MB]' }] },
+    tool_output: 'before [image/jpeg 0.2 MB] after',
+    n: 3,
+  })
+})
+
+test('small data URIs are content and stay intact', () => {
+  const html = '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">'
+  expect(stripInlineImages({ tool_input: { content: html } })).toEqual({ tool_input: { content: html } })
+})

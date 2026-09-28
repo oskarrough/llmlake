@@ -41,7 +41,7 @@ const proc = Bun.spawn(
   [
     'duckdb',
     '-c',
-    `COPY (SELECT * FROM read_json('/dev/stdin', format='newline_delimited', columns={${colsSql}})) TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD)`,
+    `COPY (SELECT * FROM read_json('/dev/stdin', format='newline_delimited', maximum_object_size=20000000, columns={${colsSql}})) TO '${out}' (FORMAT PARQUET, COMPRESSION ZSTD)`,
   ],
   {
     stdin: new Blob([rows.map((r) => JSON.stringify(r)).join('\n') + '\n']),

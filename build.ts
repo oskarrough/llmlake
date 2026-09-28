@@ -101,7 +101,7 @@ class DuckdbWorker {
     // A single quote in a path closes the SQL literal early and hangs the marker read forever; double them (Dropbox "conflicted copy" names are the usual source).
     const sqlStr = (s: string) => s.replaceAll("'", "''")
     await this.proc.stdin.write(
-      `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', columns={${colsSql}})) ` +
+      `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', maximum_object_size=20000000, columns={${colsSql}})) ` +
         `TO '${sqlStr(out)}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
     )
     await this.proc.stdin.flush()
@@ -111,8 +111,11 @@ class DuckdbWorker {
       this.buffer += this.decoder.decode(value, { stream: true })
     }
     this.buffer = this.buffer.slice(this.buffer.indexOf(marker) + marker.length)
-    // duckdb prints the marker even after a failed COPY (the error went to stderr); verify the file landed.
-    if (!(await Bun.file(out).exists())) throw new Error(`duckdb failed to write ${out}`)
+    // duckdb prints the marker even after a failed COPY (the error went to stderr), and a COPY that fails mid-scan leaves a 0-byte file behind; verify real output landed.
+    if (!(await Bun.file(out).exists()) || Bun.file(out).size === 0) {
+      await unlink(out).catch(() => {})
+      throw new Error(`duckdb failed to write ${out}`)
+    }
   }
 
   async close(): Promise<void> {
