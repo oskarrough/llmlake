@@ -1,4 +1,5 @@
 // Parse one JSONL line from a raw agent session into a normalized Row in the llmlake schema; the driver supplies a ParseContext (agent, source path, mutable state carried across lines).
+import { existsSync } from 'node:fs'
 import { basename, join, relative } from 'node:path'
 import { Option, Schema, SchemaAST } from 'effect'
 import { computeClaudeCost, computeCodexCost } from './pricing.ts'
@@ -282,6 +283,7 @@ function parseCodexSessionIdFromFile(path: string): string | null {
 export async function buildCodexSessionIndex(sessionsRoot: string): Promise<Map<string, string>> {
   const codexRoot = join(sessionsRoot, 'codex')
   const index = new Map<string, string>()
+  if (!existsSync(codexRoot)) return index
   for await (const abs of new Bun.Glob('**/*.jsonl').scan({
     cwd: codexRoot,
     absolute: true,
