@@ -2,6 +2,7 @@
 // `./llmlake status` — instant zero-AI terminal dashboard over the parquet lake: args/scope → views → runQuestions (duckdb) → renderers → main(). `scoped` carries --period/--agent/--cwd so question SQL never templates a WHERE; questions are self-describing .sql files in queries/ (adding one = drop in a file); views pick question ids + a render hint; renderers are pure rows → lines.
 import { join } from 'node:path'
 import { ensureDuckdb, runQuestions, type Row } from './lib/duck.ts'
+import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { BOLD, DIM, paint, setColorEnabled } from './lib/ui.ts'
 
 const queriesDir = join(import.meta.dir, 'queries')
@@ -369,7 +370,10 @@ async function main() {
   const scope = buildScope(flags)
 
   // Each panel's SQL, plus an inline scope-count used for the empty check.
-  const queries: Record<string, string> = { _count: 'SELECT count(*) AS n FROM scoped' }
+  const queries: Record<string, string> = {
+    _count: 'SELECT count(*) AS n FROM scoped',
+    _unpriced: unpricedSql,
+  }
   for (const p of panels) {
     queries[p.question] ??= await Bun.file(join(queriesDir, `${p.question}.sql`)).text()
   }
@@ -398,6 +402,8 @@ async function main() {
     lines.push(...renderPanel(p, rows, idx++, scope.periodLabel), '')
   }
   process.stdout.write(lines.join('\n') + '\n')
+  const warning = unpricedWarning(results._unpriced ?? [])
+  if (warning) console.warn(warning)
 }
 
 await main()

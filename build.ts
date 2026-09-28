@@ -15,7 +15,8 @@ import {
   type Row,
 } from './parse-session.ts'
 import { parseSessionRows } from './lib/build-session.ts'
-import { ensureDuckdb } from './lib/duck.ts'
+import { ensureDuckdb, runQuestions } from './lib/duck.ts'
+import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { bold, dim, plural } from './lib/ui.ts'
 
 ensureDuckdb()
@@ -227,3 +228,13 @@ console.log(
   )}`,
 )
 if (errors) process.exit(1)
+
+if (files.length) {
+  const glob = join(parquetRoot, '**/*.parquet')
+  const { unpriced } = await runQuestions(
+    `CREATE OR REPLACE VIEW scoped AS SELECT * FROM read_parquet('${glob}', hive_partitioning=true, union_by_name=true);`,
+    { unpriced: unpricedSql },
+  )
+  const warning = unpricedWarning(unpriced ?? [])
+  if (warning) console.warn(warning)
+}
