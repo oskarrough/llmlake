@@ -9,7 +9,7 @@ import { collectPi } from './collect-pi.ts'
 import { resultRow } from './lib/collect.ts'
 import { listSessions } from './lib/diff.ts'
 import { normalizeSessionTree } from './lib/normalize-sessions.ts'
-import { bold, dim, plural, renderRows, shortPath } from './lib/ui.ts'
+import { bold, dim, plural, renderRows } from './lib/ui.ts'
 
 const root = join(import.meta.dir, 'data/sessions')
 
@@ -32,4 +32,4 @@ if (norm.renamed || norm.merged || norm.removed) {
   )
 }
 
-console.log(`  ${plural(listSessions(root).size, 'session')} in ${shortPath(root)}`)
+console.log(`  ${plural(listSessions(root).size, 'session')} in ${root}`)
