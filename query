@@ -5,9 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB="$ROOT/data/llmlake.duckdb"
 INIT="$(bun "$ROOT/lib/query-init.ts")"
 
-source "$ROOT/lib/freshness.sh"
-warn_stale_parquet "$ROOT"
-
 if [[ "${1:-}" == "-c" ]]; then
   shift
   duckdb "$DB" -c "$INIT $*"

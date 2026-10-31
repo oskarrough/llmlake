@@ -1,6 +1,10 @@
-// Init SQL for ./query on stdout: events, its unfiltered `scoped` twin, classified.
+// Init SQL for ./query on stdout (events, its unfiltered `scoped` twin, classified); the stale-parquet warning goes to stderr so it shows without polluting the SQL.
 import { join } from 'node:path'
-import { eventsSql } from './lake.ts'
+import { AGENTS } from '../parse-session.ts'
+import { eventsSql, staleParquetWarning } from './lake.ts'
+
+const warning = await staleParquetWarning(AGENTS)
+if (warning) console.error(warning + '\n')
 
 console.log(
   [

@@ -16,7 +16,14 @@ import {
 } from './parse-session.ts'
 import { parseSessionRows } from './lib/build-session.ts'
 import { ensureDuckdb, runQuestions } from './lib/duck.ts'
-import { eventsSql, PARQUET_GLOB, PARQUET_ROOT, parquetPathFor, SESSIONS_ROOT } from './lib/lake.ts'
+import {
+  eventsSql,
+  PARQUET_GLOB,
+  PARQUET_ROOT,
+  parquetPathFor,
+  SESSIONS_ROOT,
+  unbuiltSessions,
+} from './lib/lake.ts'
 import { writePrices } from './lib/prices.ts'
 import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { bold, dim, plural } from './lib/ui.ts'
@@ -186,10 +193,22 @@ if (unknown) {
 await mkdir(parquetRoot, { recursive: true })
 // data/sessions is the source of truth: delete parquet with no matching source jsonl (deleted or renamed source, or an unknown agent dir). An empty scan may mean an unavailable archive — keep the cache.
 const expected = new Set<string>()
+const expectedByLower = new Map<string, string>()
 for (const src of files) {
   const agent = relative(root, src).split(/[\\/]/)[0]
-  if (agent && (AGENTS as readonly string[]).includes(agent))
-    expected.add(parquetPathFor(agent as Agent, src))
+  if (agent && (AGENTS as readonly string[]).includes(agent)) {
+    const out = parquetPathFor(agent as Agent, src)
+    expected.add(out)
+    expectedByLower.set(out.toLowerCase(), out)
+  }
+}
+// On case-insensitive disks (macOS, Windows) an output written to a canonicalized lowercase path lands in an older differently-cased parquet dir, and the scan reports that on-disk spelling. Same inode = same file, so keep it; on Linux the two spellings are separate files and the stale one is pruned.
+async function isExpected(path: string): Promise<boolean> {
+  if (expected.has(path)) return true
+  const twin = expectedByLower.get(path.toLowerCase())
+  if (!twin) return false
+  const [a, b] = await Promise.all([stat(path), stat(twin).catch(() => null)])
+  return b != null && a.ino === b.ino && a.dev === b.dev
 }
 let pruned = 0
 if (files.length) {
@@ -198,7 +217,7 @@ if (files.length) {
     absolute: true,
     onlyFiles: true,
   })) {
-    if (!expected.has(path)) {
+    if (!(await isExpected(path))) {
       await unlink(path)
       pruned++
     }
@@ -206,8 +225,10 @@ if (files.length) {
 } else {
   console.warn('warning: no source sessions found — keeping existing parquet')
 }
+// Verify: after building and pruning, every session in data/sessions must have its parquet. Anything left over is missing from the lake — a session nobody would notice is gone — so name it and fail.
+const missing = await unbuiltSessions(AGENTS)
 // Advance the stamp only after a fully successful run so a failed build is retried in full next time.
-if (!errors) await Bun.write(stampPath, codeHash)
+if (!errors && !missing.length) await Bun.write(stampPath, codeHash)
 
 console.log(bold('build'))
 console.log(
@@ -232,4 +253,15 @@ if (files.length) {
   const warning = unpricedWarning(unpriced ?? [])
   if (warning) console.warn(warning)
 }
-if (errors) process.exit(1)
+if (missing.length) {
+  const shown = 10
+  console.error(
+    `error: ${plural(missing.length, 'session')} missing from the lake after build:\n` +
+      missing
+        .slice(0, shown)
+        .map((rel) => `  ${rel}`)
+        .join('\n') +
+      (missing.length > shown ? `\n  … and ${missing.length - shown} more` : ''),
+  )
+}
+if (errors || missing.length) process.exit(1)

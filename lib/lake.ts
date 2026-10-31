@@ -1,5 +1,7 @@
-// Where the lake lives on disk and how to open it: session → parquet paths and the `events` view SQL (lib/events.sql with paths filled in).
+// Where the lake lives on disk and how to open it: session → parquet paths, the `events` view SQL (lib/events.sql with paths filled in), and the stale-parquet warning shared by status and query.
+import { stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import { plural } from './ui.ts'
 
 const repo = join(import.meta.dir, '..')
 export const SESSIONS_ROOT = join(repo, 'data/sessions')
@@ -23,4 +25,31 @@ export async function eventsSql(): Promise<string> {
   return (await Bun.file(join(import.meta.dir, 'events.sql')).text())
     .replaceAll('{parquet}', sqlStr(PARQUET_GLOB))
     .replaceAll('{prices}', sqlStr(prices))
+}
+
+async function mtime(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+// Sessions the lake is missing: no parquet, or the source changed since it was built. Same rule build uses to pick what to rebuild, so this is empty exactly when a build would do nothing. Paths are relative to data/sessions.
+export async function unbuiltSessions(agents: readonly string[]): Promise<string[]> {
+  const unbuilt: string[] = []
+  for await (const src of new Bun.Glob('**/*.jsonl').scan({ cwd: SESSIONS_ROOT, absolute: true })) {
+    const rel = relative(SESSIONS_ROOT, src)
+    const agent = rel.split(/[\\/]/)[0]!
+    if (!agents.includes(agent)) continue
+    const [srcM, outM] = await Promise.all([mtime(src), mtime(parquetPathFor(agent, src))])
+    if (srcM == null || outM == null || outM < srcM) unbuilt.push(rel)
+  }
+  return unbuilt.sort()
+}
+
+export async function staleParquetWarning(agents: readonly string[]): Promise<string | null> {
+  const unbuilt = await unbuiltSessions(agents)
+  if (!unbuilt.length) return null
+  return `warning: ${plural(unbuilt.length, 'session')} in data/sessions not built yet — run 'llmlake build' to refresh.`
 }

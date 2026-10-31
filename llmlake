@@ -3,7 +3,6 @@
 SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 cd "$(dirname "$SCRIPT")"
 ROOT="$(pwd)"
-source "$ROOT/lib/freshness.sh"
 
 if [[ $# -eq 0 ]]; then
   cat <<'EOF'
@@ -27,10 +26,4 @@ EOF
 fi
 
 [[ "$1" == "query" ]] && exec "$ROOT/query" "${@:2}"
-if [[ "$1" == "status" ]]; then
-  for arg in "${@:2}"; do
-    [[ "$arg" == "--help" || "$arg" == "-h" ]] && exec bun run "$1.ts" "${@:2}"
-  done
-  warn_stale_parquet "$ROOT"
-fi
 exec bun run "$1.ts" "${@:2}"

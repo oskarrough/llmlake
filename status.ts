@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // `./llmlake status` — instant zero-AI terminal dashboard over the parquet lake: args/scope → views → runQuestions (duckdb) → renderers → main(). `scoped` carries --period/--agent/--cwd so question SQL never templates a WHERE; questions are self-describing .sql files in queries/ (adding one = drop in a file); views pick question ids + a render hint; renderers are pure rows → lines.
 import { join } from 'node:path'
+import { AGENTS } from './parse-session.ts'
 import { ensureDuckdb, runQuestions, type Row } from './lib/duck.ts'
-import { eventsSql } from './lib/lake.ts'
+import { eventsSql, staleParquetWarning } from './lib/lake.ts'
 import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { BOLD, DIM, paint, setColorEnabled } from './lib/ui.ts'
 
@@ -367,6 +368,8 @@ async function main() {
     process.exit(1)
   }
   ensureDuckdb()
+  const stale = await staleParquetWarning(AGENTS)
+  if (stale) console.warn(stale + '\n')
   const scope = buildScope(flags)
 
   // Each panel's SQL, plus an inline scope-count used for the empty check.
