@@ -1,4 +1,4 @@
--- The `events` view: parquet rows with duplicates and prices applied at query time. {parquet}, {prices} and {duplicates} are filled in by lib/lake.ts.
+-- The `events` view: parquet rows with duplicates and prices applied at query time. {parquet}, {prices}, {duplicates} and {plans} are filled in by lib/lake.ts.
 -- A call recorded more than once (data/duplicates.json, see lib/duplicates.sql) counts once: the extra copies keep their rows but lose tokens and cost, and point at the row that counts in duplicate_of. A bridged call's kept row takes the exact model Claude Code logged.
 -- cost_usd = the cost the log itself reported when positive (pi), else tokens × the model's row in data/prices.json (written by every build), else NULL (unpriced). source_cost_usd keeps the logged value.
 -- Token conventions: codex input includes cached input (fresh = input - cache_read); every other agent reports four disjoint buckets.
@@ -16,6 +16,12 @@ SELECT * FROM read_json('{prices}', format='array', columns={
   model: 'VARCHAR', matched: 'VARCHAR', input: 'DOUBLE', output: 'DOUBLE', cache_read: 'DOUBLE', cache_write: 'DOUBLE',
   input_above_200k: 'DOUBLE', output_above_200k: 'DOUBLE',
   cache_read_above_200k: 'DOUBLE', cache_write_above_200k: 'DOUBLE'
+});
+
+-- What you pay for subscriptions (data/plans.json, written by hand: the logs never record prices). vendor matches classified.vendor; until is the last day, NULL while active.
+CREATE OR REPLACE VIEW plans AS
+SELECT * FROM read_json('{plans}', format='array', columns={
+  vendor: 'VARCHAR', plan: 'VARCHAR', usd_per_month: 'DOUBLE', since: 'DATE', until: 'DATE'
 });
 
 CREATE OR REPLACE VIEW duplicates AS

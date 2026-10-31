@@ -66,6 +66,24 @@ than guessing. A call logged twice — a resumed or forked session, an archived 
 pi/opencode call that also lands in Claude Code's logs through the Agent SDK — counts once:
 `build` lists the copies in `data/duplicates.json`, and their rows keep `duplicate_of` but no tokens.
 
+To see what your subscriptions are worth, list what you pay in `data/plans.json` (the logs never
+record prices). `status` then adds a **Subscriptions** panel comparing each plan's cost for the
+period, prorated by day, with the API-equivalent value of the usage it covered. `vendor` matches
+the model's vendor (`anthropic`, `openai`, …); leave `until` out while a plan is active.
+
+```json
+[
+  {
+    "vendor": "openai",
+    "plan": "ChatGPT Plus",
+    "usd_per_month": 20,
+    "since": "2026-03-01",
+    "until": "2026-08-25"
+  },
+  { "vendor": "anthropic", "plan": "Claude Max", "usd_per_month": 100, "since": "2024-07-04" }
+]
+```
+
 Under the hood it's just SQL: each panel is a question file in `queries/`,
 and a `view` lists which questions to show. So a new metric is a new `.sql`
 file, and the layout lives in `status.ts`.

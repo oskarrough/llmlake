@@ -63,24 +63,30 @@ Examples:
 const sqlLit = (s: string) => s.replace(/'/g, "''")
 
 // Day windows are calendar days ending now (future-dated events excluded); 'all' stays unbounded.
-function periodPredicate(p: string): { sql: string; label: string } {
+// `start` is the period's first day as SQL, for questions that count days rather than events (plans.sql).
+function periodPredicate(p: string): { sql: string; label: string; start: string } {
   const bounded = ' AND ts <= current_timestamp'
-  if (p === 'all') return { sql: 'TRUE', label: 'all time' }
-  if (p === 'today') return { sql: 'ts >= current_date' + bounded, label: 'today' }
-  if (p === 'month')
-    return { sql: `ts >= date_trunc('month', current_date)` + bounded, label: 'this month' }
+  if (p === 'all') return { sql: 'TRUE', label: 'all time', start: '(SELECT min(ts) FROM events)' }
+  if (p === 'today')
+    return { sql: 'ts >= current_date' + bounded, label: 'today', start: 'current_date' }
+  if (p === 'month') {
+    const start = `date_trunc('month', current_date)`
+    return { sql: `ts >= ${start}` + bounded, label: 'this month', start }
+  }
   const n = Number(p.match(/^(\d+)d?$/)?.[1] ?? 7)
+  const start = `current_date - INTERVAL ${n - 1} DAY`
   return {
-    sql: `ts >= current_date - INTERVAL ${n - 1} DAY` + bounded,
+    sql: `ts >= ${start}` + bounded,
     label: n === 1 ? 'today' : `last ${n} days`,
+    start,
   }
 }
 
-type Scope = { where: string; labels: string[]; periodLabel: string }
+type Scope = { where: string; labels: string[]; periodLabel: string; start: string }
 
 function buildScope(flags: Flags): Scope {
   const period = flags.period ?? (flags.days ? `${flags.days}d` : '7d')
-  const { sql, label } = periodPredicate(period)
+  const { sql, label, start } = periodPredicate(period)
   const clauses = [sql]
   const labels = [label]
   if (flags.agent) {
@@ -91,7 +97,7 @@ function buildScope(flags: Flags): Scope {
     clauses.push(`cwd ILIKE '%${sqlLit(flags.cwd)}%'`)
     labels.push(`cwd~${flags.cwd}`)
   }
-  return { where: clauses.join('\n    AND '), labels, periodLabel: label }
+  return { where: clauses.join('\n    AND '), labels, periodLabel: label, start }
 }
 
 // ── views: which questions to show, and how to render each ──────────────────
@@ -111,11 +117,14 @@ type Panel =
 const overview: Panel = { question: 'overview', title: 'Overview', render: 'header' }
 const insights: Panel = { question: 'insights', title: 'What to improve', render: 'findings' }
 const byAgent: Panel = { question: 'cross-agent', title: 'By Agent', render: 'table' }
+// Only shows when data/plans.json lists what you pay.
+const plans: Panel = { question: 'plans', title: 'Subscriptions', render: 'table' }
 
 const VIEWS: Record<string, Panel[]> = {
   // Default: lead with what to improve, then the usual cost/activity breakdown.
   dashboard: [
     overview,
+    plans,
     insights,
     {
       question: 'daily-activity',
@@ -152,7 +161,7 @@ const VIEWS: Record<string, Panel[]> = {
     { question: 'tool-reliability', title: 'Tools (calls & errors)', render: 'table' },
     byAgent,
   ],
-  insights: [overview, insights], // `./llmlake status insights`
+  insights: [overview, plans, insights], // `./llmlake status insights`
   compare: [byAgent], //              `./llmlake status compare`
 }
 
@@ -161,6 +170,7 @@ async function initSql(scope: Scope): Promise<string> {
   return [
     await eventsSql(),
     `CREATE OR REPLACE VIEW scoped AS SELECT * FROM events WHERE\n    ${scope.where};`,
+    `CREATE OR REPLACE VIEW period AS SELECT (${scope.start})::DATE AS start;`,
     classifiedSql,
   ].join('\n')
 }
