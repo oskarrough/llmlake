@@ -166,6 +166,105 @@ test('cursor tool bubble: result row_id suffixed, event_ids unique, pairing unch
   expect(result.is_error).toBe(true)
 })
 
+function opencodeCtx() {
+  return makeParseContext('opencode', 'opencode/ses_1.jsonl', '/sessions', new Map())
+}
+
+const opencodeTokens = { input: 10, output: 5, reasoning: 2, cache: { read: 100, write: 20 } }
+
+test('opencode v2: tokens on one usage row, inline content fans out with unique row_ids', async () => {
+  const text = jsonl([
+    {
+      row: 'session',
+      table: 'session_v2',
+      id: 'ses_1',
+      directory: '/x',
+      title: 't',
+      time_created: 1,
+    },
+    { row: 'session_message', id: 'm1', type: 'user', time_created: 2, data: { text: 'hi' } },
+    {
+      row: 'session_message',
+      id: 'm2',
+      type: 'assistant',
+      time_created: 3,
+      data: {
+        time: { created: 3 },
+        model: { id: 'gpt-x', providerID: 'openai' },
+        tokens: opencodeTokens,
+        finish: 'tool-calls',
+        content: [
+          { type: 'reasoning', text: '' },
+          { type: 'text', text: 'reading' },
+          { type: 'tool', id: 'call_1', name: 'read', state: { status: 'error', input: {} } },
+        ],
+      },
+    },
+  ])
+  const rows = await parseSessionText(text, opencodeCtx())
+  expect(rows.map((r) => r.event_type)).toEqual([
+    'session_meta',
+    'user_message',
+    'usage',
+    'reasoning',
+    'assistant_message',
+    'tool_call',
+    'tool_result',
+  ])
+  expect(new Set(rows.map((r) => r.row_id)).size).toBe(rows.length)
+  expect(rows.filter((r) => r.input_tokens != null)).toHaveLength(1)
+  const usage = rows.find((r) => r.event_type === 'usage')!
+  expect([usage.input_tokens, usage.output_tokens, usage.cache_read_tokens]).toEqual([10, 5, 100])
+  expect([usage.model, usage.provider, usage.session_id]).toEqual(['gpt-x', 'openai', 'ses_1'])
+  expect(rows.every((r) => r.ts != null)).toBe(true)
+  expect(rows.find((r) => r.event_type === 'tool_result')!.is_error).toBe(true)
+})
+
+test('opencode v1: parts take their role from the message line before them', async () => {
+  const text = jsonl([
+    { row: 'session', table: 'session', id: 'ses_1', parent_id: 'ses_0', time_created: 1 },
+    { row: 'message', id: 'm1', time_created: 2, data: { role: 'user' } },
+    {
+      row: 'part',
+      id: 'p1',
+      message_id: 'm1',
+      time_created: 2,
+      data: { type: 'text', text: 'hi' },
+    },
+    {
+      row: 'message',
+      id: 'm2',
+      time_created: 3,
+      data: { role: 'assistant', modelID: 'claude-x', tokens: opencodeTokens },
+    },
+    {
+      row: 'part',
+      id: 'p2',
+      message_id: 'm2',
+      time_created: 4,
+      data: { type: 'text', text: 'ok' },
+    },
+    {
+      row: 'part',
+      id: 'p3',
+      message_id: 'm2',
+      time_created: 5,
+      data: { type: 'step-finish', tokens: opencodeTokens },
+    },
+  ])
+  const rows = await parseSessionText(text, opencodeCtx())
+  expect(rows.map((r) => [r.event_type, r.role])).toEqual([
+    ['session_meta', null],
+    ['user_message', 'user'],
+    ['usage', 'assistant'],
+    ['assistant_message', 'assistant'],
+    ['other', null],
+  ])
+  // step-finish repeats the message's tokens; only the usage row counts them.
+  expect(rows.filter((r) => r.input_tokens != null)).toHaveLength(1)
+  expect(rows.every((r) => r.is_subagent && r.parent_session_id === 'ses_0')).toBe(true)
+})
+
 function claudeCtx(sourceFile = 'claude/session.jsonl') {
   return makeParseContext('claude', sourceFile, '/sessions', new Map())
 }
@@ -559,5 +658,7 @@ test('large inline base64 images collapse to a size stub, nested and in strings'
 
 test('small data URIs are content and stay intact', () => {
   const html = '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">'
-  expect(stripInlineImages({ tool_input: { content: html } })).toEqual({ tool_input: { content: html } })
+  expect(stripInlineImages({ tool_input: { content: html } })).toEqual({
+    tool_input: { content: html },
+  })
 })

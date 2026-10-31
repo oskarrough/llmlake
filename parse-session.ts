@@ -21,7 +21,7 @@ const STR_REQ = Schema.String.pipe(duckdb('VARCHAR'))
 const INT_REQ = Schema.Number.pipe(duckdb('BIGINT'))
 const BOOL_REQ = Schema.Boolean.pipe(duckdb('BOOLEAN'))
 
-export const AGENTS = ['claude', 'pi', 'codex', 'hermes', 'cursor'] as const
+export const AGENTS = ['claude', 'pi', 'codex', 'hermes', 'cursor', 'opencode'] as const
 const AgentSchema = Schema.Literal(...AGENTS).pipe(duckdb('VARCHAR'))
 export type Agent = (typeof AGENTS)[number]
 
@@ -165,6 +165,8 @@ export type ParseState = {
   // Streaming assistant chunks share message.id + requestId; keep last per file.
   claudeKeyedUsage: Map<string, ClaudeKeyedUsage>
   codexWalk: CodexTokenWalk
+  // opencode v1 splits a message into a `message` line and its `part` lines; parts take their role from the message before them.
+  opencodeRole: string | null
 }
 
 export type ParseContext = {
@@ -193,6 +195,7 @@ export function newState(): ParseState {
     seenEventIds: new Set(),
     claudeKeyedUsage: new Map(),
     codexWalk: newCodexWalk(),
+    opencodeRole: null,
   }
 }
 
@@ -1133,12 +1136,190 @@ function parseCursor(line: string, lineNo: number, ctx: ParseContext): Row[] {
   return [row]
 }
 
+// opencode lines are database rows exported verbatim by collect-opencode.ts, tagged by `row`: one `session` line, then either v2 `session_message` lines (content inline) or v1 `message` lines each followed by their `part` lines. Every assistant message becomes one `usage` row carrying its tokens, plus token-free rows for its text, reasoning and tool calls. opencode's input excludes cached tokens and its output already includes reasoning.
+type OpencodeTokens = { input?: number; output?: number; cache?: { read?: number; write?: number } }
+type OpencodeTool = {
+  id: string | null
+  name: string | null
+  ts: string | null
+  input: unknown
+  output: unknown
+  status: string | null
+}
+
+const opencodeTs = (ms: unknown): string | null =>
+  typeof ms === 'number' ? new Date(ms).toISOString() : null
+
+function opencodeUsage(row: Row, d: { tokens?: OpencodeTokens; cost?: number; finish?: string }) {
+  row.event_type = 'usage'
+  row.role = 'assistant'
+  row.input_tokens = d.tokens?.input ?? null
+  row.output_tokens = d.tokens?.output ?? null
+  row.cache_read_tokens = d.tokens?.cache?.read ?? null
+  row.cache_write_tokens = d.tokens?.cache?.write ?? null
+  row.cost_usd = typeof d.cost === 'number' ? d.cost : null
+  row.stop_reason = d.finish ?? null
+}
+
+// A tool call row, plus its result row once the call finished; `suffix` keeps row_ids unique when one line holds several calls.
+function opencodeToolRows(base: Row, tool: OpencodeTool, suffix: string): Row[] {
+  const call: Row = { ...base, row_id: `${base.row_id}${suffix}` }
+  call.ts = tool.ts ?? base.ts
+  call.event_id = tool.id
+  call.event_type = 'tool_call'
+  call.role = 'assistant'
+  call.tool_name = tool.name
+  call.tool_call_id = tool.id
+  call.tool_input = maybeJson(tool.input ?? null)
+  if (tool.status !== 'completed' && tool.status !== 'error') return [call]
+  const result: Row = { ...call, row_id: `${call.row_id}-result` }
+  result.event_id = tool.id ? `${tool.id}:result` : null
+  result.parent_id = tool.id
+  result.event_type = 'tool_result'
+  result.role = 'tool'
+  result.tool_input = null
+  result.tool_output = maybeJson(tool.output ?? null)
+  result.is_error = tool.status === 'error'
+  return [call, result]
+}
+
+function parseOpencode(line: string, lineNo: number, ctx: ParseContext): Row[] {
+  const { state } = ctx
+  const ev = JSON.parse(line)
+  const d = ev.data ?? {}
+
+  if (ev.row === 'session') {
+    state.session_id = ev.id ?? null
+    state.cwd = ev.directory ?? null
+    state.parent_session_id = ev.parent_id ?? null
+    state.is_subagent = ev.parent_id != null
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = opencodeTs(ev.time_created)
+    row.event_id = ev.id ?? null
+    row.event_type = 'session_meta'
+    row.text = ev.title ?? null
+    return [row]
+  }
+
+  // v2: one line per message, content inline.
+  if (ev.row === 'session_message') {
+    if (d.model?.id) state.model = d.model.id
+    if (d.model?.providerID) state.provider = d.model.providerID
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = opencodeTs(d.time?.created ?? ev.time_created)
+    row.event_id = ev.id ?? null
+    if (ev.type === 'user') {
+      row.event_type = 'user_message'
+      row.role = 'user'
+      row.text = d.text ?? null
+      return [row]
+    }
+    if (ev.type !== 'assistant') {
+      // synthetic (injected file reads), system (instruction diffs), idle, model-/agent-switched: housekeeping, not a turn.
+      row.event_type = ev.type === 'synthetic' || ev.type === 'system' ? 'other' : 'session_meta'
+      row.role = ev.type === 'synthetic' || ev.type === 'system' ? 'system' : null
+      row.text = d.text ?? d.error?.message ?? null
+      return [row]
+    }
+    opencodeUsage(row, d)
+    const rows = [row]
+    const content: Record<string, unknown>[] = Array.isArray(d.content) ? d.content : []
+    content.forEach((c, i) => {
+      const suffix = `-${i}`
+      if (c.type === 'tool') {
+        const st = (c.state ?? {}) as Record<string, unknown>
+        rows.push(
+          ...opencodeToolRows(
+            { ...baseRow(ev, lineNo, ctx), ts: row.ts },
+            {
+              id: (c.id as string) ?? null,
+              name: (c.name as string) ?? null,
+              ts: opencodeTs((c.time as { created?: number })?.created),
+              input: st.input,
+              output: st.content ?? st.output ?? st.error,
+              status: (st.status as string) ?? null,
+            },
+            suffix,
+          ),
+        )
+        return
+      }
+      if (c.type !== 'text' && c.type !== 'reasoning') return
+      const part = baseRow(ev, lineNo, ctx)
+      part.row_id = `${part.row_id}${suffix}`
+      part.ts = row.ts
+      part.event_id = `${ev.id}:${i}`
+      part.event_type = c.type === 'text' ? 'assistant_message' : 'reasoning'
+      part.role = 'assistant'
+      part.text = (c.text as string) || null
+      rows.push(part)
+    })
+    return rows
+  }
+
+  // v1: a message line sets the role and model for the part lines after it.
+  if (ev.row === 'message') {
+    state.opencodeRole = d.role ?? null
+    const model = d.modelID ?? d.model?.modelID
+    const provider = d.providerID ?? d.model?.providerID
+    if (model) state.model = model
+    if (provider) state.provider = provider
+    if (d.path?.cwd) state.cwd = d.path.cwd
+    if (d.role !== 'assistant') return [] // a user message's text arrives in its parts
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = opencodeTs(d.time?.created ?? ev.time_created)
+    row.event_id = ev.id ?? null
+    row.parent_id = d.parentID ?? null
+    opencodeUsage(row, d)
+    return [row]
+  }
+
+  if (ev.row === 'part') {
+    const row = baseRow(ev, lineNo, ctx)
+    row.ts = opencodeTs(ev.time_created)
+    row.event_id = ev.id ?? null
+    row.parent_id = ev.message_id ?? null
+    const user = state.opencodeRole === 'user'
+    if (d.type === 'tool') {
+      const st = d.state ?? {}
+      return opencodeToolRows(
+        row,
+        {
+          id: d.callID ?? null,
+          name: d.tool ?? null,
+          ts: row.ts,
+          input: st.input,
+          output: st.output ?? st.error,
+          status: st.status ?? null,
+        },
+        '',
+      )
+    }
+    if (d.type === 'text' && !d.synthetic) {
+      row.event_type = user ? 'user_message' : 'assistant_message'
+      row.role = user ? 'user' : 'assistant'
+      row.text = d.text ?? null
+    } else if (d.type === 'reasoning') {
+      row.event_type = 'reasoning'
+      row.role = 'assistant'
+      row.text = d.text || null
+    } else {
+      // step-start/-finish (per-step tokens duplicate the message's), patch, file, synthetic text.
+      row.text = typeof d.text === 'string' ? d.text : null
+    }
+    return [row]
+  }
+
+  return []
+}
+
 const PARSERS: Record<Agent, (l: string, n: number, c: ParseContext) => Row | Row[] | null> = {
   claude: parseClaude,
   pi: parsePi,
   codex: parseCodex,
   hermes: parseHermes,
   cursor: parseCursor,
+  opencode: parseOpencode,
 }
 
 export function parseLine(line: string, lineNo: number, ctx: ParseContext): Row[] {

@@ -5,6 +5,7 @@ import { collectClaude } from './collect-claude.ts'
 import { collectCodex } from './collect-codex.ts'
 import { collectCursor } from './collect-cursor.ts'
 import { collectHermes } from './collect-hermes.ts'
+import { collectOpencode } from './collect-opencode.ts'
 import { collectPi } from './collect-pi.ts'
 import { resultRow } from './lib/collect.ts'
 import { listSessions } from './lib/diff.ts'
@@ -18,6 +19,7 @@ const results = await Promise.all([
   collectCodex(),
   collectCursor(),
   collectHermes(),
+  collectOpencode(),
   collectPi(),
 ])
 
