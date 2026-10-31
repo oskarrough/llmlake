@@ -101,7 +101,7 @@ class DuckdbWorker {
     // A single quote in a path closes the SQL literal early and hangs the marker read forever; double them (Dropbox "conflicted copy" names are the usual source).
     const sqlStr = (s: string) => s.replaceAll("'", "''")
     await this.proc.stdin.write(
-      `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', maximum_object_size=20000000, columns={${colsSql}})) ` +
+      `COPY (SELECT * FROM read_json('${sqlStr(this.tmpJson)}', format='newline_delimited', maximum_object_size=268435456, columns={${colsSql}})) ` +
         `TO '${sqlStr(out)}' (FORMAT PARQUET, COMPRESSION ZSTD);\n.print ${marker}\n`,
     )
     await this.proc.stdin.flush()
