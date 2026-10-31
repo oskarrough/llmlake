@@ -1,14 +1,14 @@
 -- At a glance: estimated value, activity, and cache efficiency for the period. Reads FROM classified so it works unchanged from ./llmlake status and ./llmlake query.
 SELECT
   round(sum(coalesce(estimated_value_usd, 0)), 2)               AS estimated_value_usd,
-  -- Label only when the number alone would mislead: 'sub' if every token-bearing event is subscription-backed, 'unpriced' if nothing is priced.
+  -- Label only when the number alone would mislead: 'unpriced' if nothing is priced.
   CASE
-    WHEN bool_and(billing_mode = 'subscription') FILTER (
-      WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-        OR cache_read_tokens IS NOT NULL OR cache_write_tokens IS NOT NULL
-    ) THEN 'sub'
     WHEN coalesce(sum(estimated_value_usd), 0) = 0 THEN 'unpriced'
   END                                                           AS estimated_value_usd_label,
+  -- The same value split by who pays: per-use API (close to the bill), subscriptions (what those tokens would have cost at API rates), and providers whose sessions don't say (key or login). Local models are free.
+  round(sum(coalesce(estimated_value_usd, 0)) FILTER (WHERE billing_mode = 'api'), 2)          AS paid_per_use_usd,
+  round(sum(coalesce(estimated_value_usd, 0)) FILTER (WHERE billing_mode = 'subscription'), 2) AS subscription_usd,
+  round(sum(coalesce(estimated_value_usd, 0)) FILTER (WHERE billing_mode = 'unknown'), 2)      AS unknown_billing_usd,
   count(*) FILTER (WHERE event_type = 'tool_call')              AS tool_calls,
   count(DISTINCT session_id)                                    AS sessions,
   sum(coalesce(input_tokens, 0))                                AS input_tokens,

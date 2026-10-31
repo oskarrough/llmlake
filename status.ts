@@ -272,7 +272,7 @@ function renderHeader(rows: Row[]): string[] {
   const r = rows[0] ?? {}
   const num = (k: string) => toNum(r[k]) ?? 0
   const stat = (v: string, label: string) => paint(BOLD, v) + ' ' + paint(DIM, label)
-  // Optional `estimated_value_usd_label` ('sub'/'unpriced') replaces the numeric estimate.
+  // Optional `estimated_value_usd_label` ('unpriced') replaces the numeric estimate.
   const value = withLabel(
     cell(r.estimated_value_usd_label),
     num('estimated_value_usd'),
@@ -285,6 +285,15 @@ function renderHeader(rows: Row[]): string[] {
       stat(humanInt(num('sessions')), 'sessions'),
       stat((num('cache_hit_pct') || 0) + '%', 'cache hit'),
     ].join('   '),
+    // Who pays for that value; empty parts are left out.
+    [
+      ['paid_per_use_usd', 'paid per use'],
+      ['subscription_usd', 'covered by subscriptions'],
+      ['unknown_billing_usd', 'billing unknown'],
+    ]
+      .filter(([k]) => num(k!) > 0)
+      .map(([k, label]) => stat(fmtCost(num(k!)), label!))
+      .join(paint(DIM, ' · ')),
     paint(
       DIM,
       [
