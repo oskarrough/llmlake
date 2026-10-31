@@ -41,8 +41,8 @@ export async function writePrices(parquetGlob: string): Promise<{ warning: strin
   const lookup = createPriceLookup(litellm)
   const rows: PriceRow[] = []
   for (const { model } of models) {
-    const price = lookup(String(model))
-    if (price) rows.push(priceRow(String(model), price))
+    const match = lookup(String(model))
+    if (match) rows.push(priceRow(String(model), match))
   }
   await Bun.write(PRICES_PATH, JSON.stringify(rows))
   return { warning }

@@ -12,7 +12,7 @@ CREATE OR REPLACE MACRO llmlake_tier(tokens, rate, above) AS
 
 CREATE OR REPLACE VIEW prices AS
 SELECT * FROM read_json('{prices}', format='array', columns={
-  model: 'VARCHAR', input: 'DOUBLE', output: 'DOUBLE', cache_read: 'DOUBLE', cache_write: 'DOUBLE',
+  model: 'VARCHAR', matched: 'VARCHAR', input: 'DOUBLE', output: 'DOUBLE', cache_read: 'DOUBLE', cache_write: 'DOUBLE',
   input_above_200k: 'DOUBLE', output_above_200k: 'DOUBLE',
   cache_read_above_200k: 'DOUBLE', cache_write_above_200k: 'DOUBLE'
 });

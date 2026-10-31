@@ -115,53 +115,9 @@ function fromLitellm(e: LitellmEntry): Price | undefined {
   return p
 }
 
-// --- Fuzzy model matching (ported from ccusage) -----------------------------
-// Logged names carry provider prefixes, separator variants and date suffixes; match across those but never collapse distinct numeric versions.
-
-const isBoundary = (code: number): boolean =>
-  !((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122))
-
-const normalizeKey = (s: string): string =>
-  s.includes('.') || s.includes('@') ? s.replace(/[.@]/g, '-') : s
-
-// A YYYYMMDD suffix is an alias; any other numeric suffix is a different version we must not collapse into.
-function suffixStartsWithNumericVersion(key: string, suffix: string): boolean {
-  if (!/[0-9]$/.test(key)) return false
-  if (suffix[0] !== '-' && suffix[0] !== '.') return false
-  const rest = suffix.slice(1)
-  const digits = rest.match(/^[0-9]+/)?.[0]
-  if (!digits) return false
-  const after = rest.charCodeAt(digits.length) // NaN when at end
-  const isDate = digits.length === 8 && (Number.isNaN(after) || isBoundary(after))
-  return !isDate
-}
-
-function suffixAllowsMatch(key: string, suffix: string): boolean {
-  if (suffix.length === 0) return true
-  if (!isBoundary(suffix.charCodeAt(0))) return false
-  return !suffixStartsWithNumericVersion(key, suffix)
-}
-
-// True when `key` appears in `value` flanked by model-name boundaries.
-function containsKey(value: string, key: string): boolean {
-  let from = 0
-  for (;;) {
-    const i = value.indexOf(key, from)
-    if (i < 0) return false
-    const beforeOk = i === 0 || isBoundary(value.charCodeAt(i - 1))
-    if (beforeOk && suffixAllowsMatch(key, value.slice(i + key.length))) return true
-    from = i + 1
-  }
-}
-
-function keyMatches(candidate: string, model: string, normModel: string): boolean {
-  if (containsKey(model, candidate) || containsKey(candidate, model)) return true
-  const normCandidate = normalizeKey(candidate)
-  return containsKey(normModel, normCandidate) || containsKey(normCandidate, normModel)
-}
-
-// Build a memoized model → price lookup over LiteLLM + the curated overrides: exact key first, then normalized Claude/Codex names, then the fuzzy scan.
-export function createPriceLookup(litellm: Litellm): (model: string) => Price | undefined {
+// Build a memoized model → price lookup over LiteLLM + the curated overrides. Only exact keys count, tried in this order: the logged name; its Claude/Codex normalization (date and version suffixes); the name without a router prefix (`openai/gpt-5.6-sol`, `~deepseek/…`) and with dotted versions dashed (`claude-opus-4.8` → `claude-opus-4-8`); finally, for namespaced ids only, the same id listed under a host (`novita/deepseek/…`, `fireworks_ai/accounts/fireworks/…`), shortest key first. Never substring matches: a bare alias like `sonnet` would grab whichever Sonnet listing is longest. Returns the key it matched so every price can be traced.
+export type PriceMatch = { key: string; price: Price }
+export function createPriceLookup(litellm: Litellm): (model: string) => PriceMatch | undefined {
   // LiteLLM as base, curated PRICING spread over it (keeps LiteLLM tier fields, curated rates win).
   const merged: Record<string, Price> = {}
   for (const [model, entry] of Object.entries(litellm as Record<string, LitellmEntry>)) {
@@ -172,20 +128,33 @@ export function createPriceLookup(litellm: Litellm): (model: string) => Price | 
     merged[model] = { ...merged[model], ...override }
   }
 
-  function fuzzyFind(model: string): Price | undefined {
-    const normModel = normalizeKey(model)
+  const keys = Object.keys(merged)
+  const exact = (name: string) => (merged[name] ? name : undefined)
+
+  // The name as a router logs it, minus one `vendor/` or `~vendor/` prefix, each also with dotted versions dashed.
+  function spellings(model: string): string[] {
+    const out = new Set<string>()
+    for (const name of [model, model.replace(/^~?[\w.-]+\//, '')]) {
+      out.add(name)
+      out.add(name.replace(/(\d)\.(\d)/g, '$1-$2'))
+    }
+    return [...out]
+  }
+
+  function hostListing(model: string): string | undefined {
+    if (!model.includes('/')) return undefined
+    const tail = '/' + model
     let best: string | undefined
-    for (const candidate of Object.keys(merged)) {
-      if (!keyMatches(candidate, model, normModel)) continue
-      // Prefer the longest (most specific) key; tie-break lexicographically, matching ccusage.
+    for (const key of keys) {
+      if (!key.endsWith(tail)) continue
       if (
         best === undefined ||
-        candidate.length > best.length ||
-        (candidate.length === best.length && candidate < best)
+        key.length < best.length ||
+        (key.length === best.length && key < best)
       )
-        best = candidate
+        best = key
     }
-    return best === undefined ? undefined : merged[best]
+    return best
   }
 
   function normalizeClaudeModel(raw: string): string {
@@ -216,14 +185,16 @@ export function createPriceLookup(litellm: Litellm): (model: string) => Price | 
   }
 
   // The same model string repeats across the lake, so each distinct name resolves once.
-  const resolved = new Map<string, Price | null>()
+  const resolved = new Map<string, PriceMatch | null>()
   return (model) => {
     const cached = resolved.get(model)
     if (cached !== undefined) return cached ?? undefined
     const name = model.includes('claude') ? normalizeClaudeModel(model) : normalizeCodexModel(model)
-    const price = merged[model] ?? merged[name] ?? fuzzyFind(name)
-    resolved.set(model, price ?? null)
-    return price
+    const key =
+      exact(model) ?? exact(name) ?? spellings(model).map(exact).find(Boolean) ?? hostListing(model)
+    const match = key ? { key, price: merged[key]! } : null
+    resolved.set(model, match)
+    return match ?? undefined
   }
 }
 
@@ -231,13 +202,14 @@ export type PriceRow = Required<Pick<Price, 'input' | 'output' | 'cache_read' | 
   Pick<
     Price,
     'input_above_200k' | 'output_above_200k' | 'cache_read_above_200k' | 'cache_write_above_200k'
-  > & { model: string }
+  > & { model: string; matched: string }
 
 // Fill missing cache rates with the vendor default so the SQL never multiplies by NULL.
-export function priceRow(model: string, p: Price): PriceRow {
+export function priceRow(model: string, { key, price: p }: PriceMatch): PriceRow {
   const anthropic = model.includes('claude')
   return {
     model,
+    matched: key,
     ...p,
     cache_read: p.cache_read ?? p.input * (anthropic ? 0.1 : 0.25),
     cache_write: p.cache_write ?? p.input * (anthropic ? 1.25 : 1),
