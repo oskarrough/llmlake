@@ -6,7 +6,7 @@ SELECT
   NULL::DOUBLE                          AS billed_spend_usd,
   CASE
     WHEN s.agent IN ('claude', 'codex') THEN 'subscription'
-    WHEN s.provider IN ('openai-codex', 'claude-code-subscription') THEN 'subscription'
+    WHEN s.provider IN ('openai-codex', 'claude-code-subscription', 'claude-bridge') THEN 'subscription'
     WHEN s.provider IN ('lmstudio', 'ollama') THEN 'local'
     WHEN s.agent = 'hermes' THEN 'unknown' -- platform tag, not a model route
     WHEN s.provider IS NOT NULL THEN 'api'
