@@ -6,9 +6,11 @@ SELECT
   NULL::DOUBLE                          AS billed_spend_usd,
   CASE
     WHEN s.agent IN ('claude', 'codex') THEN 'subscription'
-    WHEN s.provider IN ('openai-codex', 'claude-code-subscription', 'claude-bridge') THEN 'subscription'
+    -- Providers that only run on an account login: ChatGPT (openai-codex) and Claude Code's login, which pi-claude-code (claude-code), pi-claude-bridge and opencode's built-in claude-agent all go through.
+    WHEN s.provider IN ('openai-codex', 'claude-code', 'claude-code-subscription', 'claude-bridge', 'claude-agent') THEN 'subscription'
     WHEN s.provider IN ('lmstudio', 'ollama') THEN 'local'
-    WHEN s.agent = 'opencode' THEN 'unknown' -- its provider ids (openai, anthropic) cover both API keys and account logins
+    -- These ids serve both API keys and account logins, and sessions don't record which (pi logs ChatGPT logins as openai-codex, so its openai is a key).
+    WHEN s.provider = 'anthropic' OR (s.agent = 'opencode' AND s.provider = 'openai') THEN 'unknown'
     WHEN s.agent = 'hermes' THEN 'unknown' -- platform tag, not a model route
     WHEN s.provider IS NOT NULL THEN 'api'
     ELSE 'unknown'
