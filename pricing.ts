@@ -1,5 +1,5 @@
-// Per-million USD prices keyed by exact model string. Pi rows carry their own cost; this prices Claude and Codex rows at parse time. Sources merged at load: litellm-pricing.json (filtered LiteLLM mirror, refresh with ./sync-pricing.ts) + the curated PRICING table, which always wins. Cache assumes Anthropic's 5-min cache (read 0.1×, write 1.25× input); OpenAI cached_input 0.25×.
-import LITELLM from './litellm-pricing.json' with { type: 'json' }
+// Per-million USD prices keyed by model string, resolved at build time into data/prices.json (lib/prices.ts) and applied to token counts at query time (lib/events.sql). Sources merged: the LiteLLM price list (fetched each build, committed snapshot litellm-pricing.json as offline fallback) + the curated PRICING table, which always wins. Missing cache rates default per vendor: Anthropic's 5-min cache (read 0.1×, write 1.25× input), others read 0.25× and write 1× input.
+import { join } from 'node:path'
 
 export type Price = {
   input: number
@@ -40,18 +40,52 @@ export const PRICING: Record<string, Price> = {
   // Qwen omitted: pricing varies by provider until we know which one Pi routes to.
 }
 
-type Tokens = {
-  input_tokens: number | null
-  output_tokens: number | null
-  cache_read_tokens: number | null
-  cache_write_tokens: number | null
+const LITELLM_URL =
+  'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
+
+// Only the per-token fields this file reads, plus the context limit — the rest is dropped to keep the snapshot small.
+const KEEP = [
+  'input_cost_per_token',
+  'output_cost_per_token',
+  'cache_creation_input_token_cost',
+  'cache_read_input_token_cost',
+  'input_cost_per_token_above_200k_tokens',
+  'output_cost_per_token_above_200k_tokens',
+  'cache_creation_input_token_cost_above_200k_tokens',
+  'cache_read_input_token_cost_above_200k_tokens',
+  'max_input_tokens',
+] as const
+
+export type Litellm = Record<string, Record<string, number>>
+
+// Download LiteLLM's price list, keeping entries with both input+output prices and only the KEEP fields; sorted keys keep the committed snapshot's diff stable.
+export async function fetchLitellm(timeoutMs = 10_000): Promise<Litellm> {
+  const res = await fetch(LITELLM_URL, { signal: AbortSignal.timeout(timeoutMs) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const raw = (await res.json()) as Record<string, Record<string, unknown>>
+  const out: Litellm = {}
+  for (const [model, value] of Object.entries(raw)) {
+    if (typeof value !== 'object' || value === null) continue
+    if (value.input_cost_per_token == null || value.output_cost_per_token == null) continue
+    // Drop Vertex aliases: they duplicate canonical keys; the fuzzy matcher resolves vertex_ai/… names anyway.
+    if (model.includes('vertex_ai/')) continue
+    const entry: Record<string, number> = {}
+    for (const field of KEEP) {
+      const v = value[field]
+      if (typeof v === 'number') entry[field] = v
+    }
+    out[model] = entry
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)))
 }
+
+export const SNAPSHOT_PATH = join(import.meta.dir, 'litellm-pricing.json')
 
 const CODEX_DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/
 const CLAUDE_DATE_SUFFIX = /-\d{8}$/
 const CLAUDE_VERSION_SUFFIX = /-v\d+:\d+$/
 
-// LiteLLM reports per-token USD; convert to per-million at load and merge the curated overrides.
+// LiteLLM reports per-token USD; convert to per-million and merge the curated overrides.
 type LitellmEntry = {
   input_cost_per_token?: number
   output_cost_per_token?: number
@@ -80,19 +114,6 @@ function fromLitellm(e: LitellmEntry): Price | undefined {
     p.cache_read_above_200k = e.cache_read_input_token_cost_above_200k_tokens * M
   return p
 }
-
-// LiteLLM snapshot as base, curated PRICING spread over it (keeps snapshot tier fields, curated rates win).
-const MERGED: Record<string, Price> = {}
-for (const [model, entry] of Object.entries(LITELLM as Record<string, LitellmEntry>)) {
-  const p = fromLitellm(entry)
-  if (p) MERGED[model] = p
-}
-for (const [model, override] of Object.entries(PRICING)) {
-  MERGED[model] = { ...MERGED[model], ...override }
-}
-
-// Memoized price lookup: the same model string repeats across rows, so the fuzzy scan runs once per distinct name.
-const RESOLVED = new Map<string, Price | null>()
 
 // --- Fuzzy model matching (ported from ccusage) -----------------------------
 // Logged names carry provider prefixes, separator variants and date suffixes; match across those but never collapse distinct numeric versions.
@@ -139,93 +160,86 @@ function keyMatches(candidate: string, model: string, normModel: string): boolea
   return containsKey(normModel, normCandidate) || containsKey(normCandidate, normModel)
 }
 
-function fuzzyFind(model: string): Price | undefined {
-  const normModel = normalizeKey(model)
-  let best: string | undefined
-  for (const candidate of Object.keys(MERGED)) {
-    if (!keyMatches(candidate, model, normModel)) continue
-    // Prefer the longest (most specific) key; tie-break lexicographically, matching ccusage.
-    if (
-      best === undefined ||
-      candidate.length > best.length ||
-      (candidate.length === best.length && candidate < best)
-    )
-      best = candidate
+// Build a memoized model → price lookup over LiteLLM + the curated overrides: exact key first, then normalized Claude/Codex names, then the fuzzy scan.
+export function createPriceLookup(litellm: Litellm): (model: string) => Price | undefined {
+  // LiteLLM as base, curated PRICING spread over it (keeps LiteLLM tier fields, curated rates win).
+  const merged: Record<string, Price> = {}
+  for (const [model, entry] of Object.entries(litellm as Record<string, LitellmEntry>)) {
+    const p = fromLitellm(entry)
+    if (p) merged[model] = p
   }
-  return best === undefined ? undefined : MERGED[best]
-}
-
-function findPrice(model: string): Price | undefined {
-  const cached = RESOLVED.get(model)
-  if (cached !== undefined) return cached ?? undefined
-  const price = MERGED[model] ?? fuzzyFind(model)
-  RESOLVED.set(model, price ?? null)
-  return price
-}
-
-export function normalizeClaudeModel(raw: string): string {
-  let m = raw.trim()
-  if (m.startsWith('anthropic.')) m = m.slice('anthropic.'.length)
-  const dot = m.lastIndexOf('.')
-  if (dot >= 0 && m.includes('claude-')) {
-    const tail = m.slice(dot + 1)
-    if (tail.startsWith('claude-')) m = tail
+  for (const [model, override] of Object.entries(PRICING)) {
+    merged[model] = { ...merged[model], ...override }
   }
-  m = m.replace(CLAUDE_VERSION_SUFFIX, '')
-  if (CLAUDE_DATE_SUFFIX.test(m)) {
-    const base = m.replace(CLAUDE_DATE_SUFFIX, '')
-    if (MERGED[base]) return base
+
+  function fuzzyFind(model: string): Price | undefined {
+    const normModel = normalizeKey(model)
+    let best: string | undefined
+    for (const candidate of Object.keys(merged)) {
+      if (!keyMatches(candidate, model, normModel)) continue
+      // Prefer the longest (most specific) key; tie-break lexicographically, matching ccusage.
+      if (
+        best === undefined ||
+        candidate.length > best.length ||
+        (candidate.length === best.length && candidate < best)
+      )
+        best = candidate
+    }
+    return best === undefined ? undefined : merged[best]
   }
-  return m
-}
 
-export function normalizeCodexModel(raw: string): string {
-  let m = raw.trim()
-  if (m.startsWith('openai/')) m = m.slice('openai/'.length)
-  if (MERGED[m]) return m
-  if (CODEX_DATE_SUFFIX.test(m)) {
-    const base = m.replace(CODEX_DATE_SUFFIX, '')
-    if (MERGED[base]) return base
+  function normalizeClaudeModel(raw: string): string {
+    let m = raw.trim()
+    if (m.startsWith('anthropic.')) m = m.slice('anthropic.'.length)
+    const dot = m.lastIndexOf('.')
+    if (dot >= 0 && m.includes('claude-')) {
+      const tail = m.slice(dot + 1)
+      if (tail.startsWith('claude-')) m = tail
+    }
+    m = m.replace(CLAUDE_VERSION_SUFFIX, '')
+    if (CLAUDE_DATE_SUFFIX.test(m)) {
+      const base = m.replace(CLAUDE_DATE_SUFFIX, '')
+      if (merged[base]) return base
+    }
+    return m
   }
-  return m
+
+  function normalizeCodexModel(raw: string): string {
+    let m = raw.trim()
+    if (m.startsWith('openai/')) m = m.slice('openai/'.length)
+    if (merged[m]) return m
+    if (CODEX_DATE_SUFFIX.test(m)) {
+      const base = m.replace(CODEX_DATE_SUFFIX, '')
+      if (merged[base]) return base
+    }
+    return m
+  }
+
+  // The same model string repeats across the lake, so each distinct name resolves once.
+  const resolved = new Map<string, Price | null>()
+  return (model) => {
+    const cached = resolved.get(model)
+    if (cached !== undefined) return cached ?? undefined
+    const name = model.includes('claude') ? normalizeClaudeModel(model) : normalizeCodexModel(model)
+    const price = merged[model] ?? merged[name] ?? fuzzyFind(name)
+    resolved.set(model, price ?? null)
+    return price
+  }
 }
 
-// One bucket's cost; tokens beyond 200k bill at the higher marginal rate when present. Rates are per-million.
-function tieredCost(tokens: number, rate: number, above: number | undefined): number {
-  const THRESHOLD = 200_000
-  if (tokens <= 0) return 0
-  if (above != null && tokens > THRESHOLD)
-    return (THRESHOLD * rate + (tokens - THRESHOLD) * above) / 1e6
-  return (tokens * rate) / 1e6
-}
+export type PriceRow = Required<Pick<Price, 'input' | 'output' | 'cache_read' | 'cache_write'>> &
+  Pick<
+    Price,
+    'input_above_200k' | 'output_above_200k' | 'cache_read_above_200k' | 'cache_write_above_200k'
+  > & { model: string }
 
-// Anthropic convention: input_tokens excludes cache reads/writes (separate counters); sum all four buckets.
-export function computeClaudeCost(model: string | null, t: Tokens): number | null {
-  if (!model) return null
-  const p = findPrice(normalizeClaudeModel(model))
-  if (!p) return null
-  const cacheReadRate = p.cache_read ?? p.input * 0.1
-  const cacheWriteRate = p.cache_write ?? p.input * 1.25
-  return (
-    tieredCost(t.input_tokens ?? 0, p.input, p.input_above_200k) +
-    tieredCost(t.output_tokens ?? 0, p.output, p.output_above_200k) +
-    tieredCost(t.cache_read_tokens ?? 0, cacheReadRate, p.cache_read_above_200k) +
-    tieredCost(t.cache_write_tokens ?? 0, cacheWriteRate, p.cache_write_above_200k)
-  )
-}
-
-// OpenAI convention: input_tokens includes cached_input_tokens; fresh input is the difference.
-export function computeCodexCost(model: string | null, t: Tokens): number | null {
-  if (!model) return null
-  const p = findPrice(normalizeCodexModel(model))
-  if (!p) return null
-  const cachedRate = p.cache_read ?? p.input * 0.25
-  const inTok = t.input_tokens ?? 0
-  const cachedTok = t.cache_read_tokens ?? 0
-  const freshIn = Math.max(0, inTok - cachedTok)
-  return (
-    tieredCost(freshIn, p.input, p.input_above_200k) +
-    (cachedTok * cachedRate) / 1e6 +
-    tieredCost(t.output_tokens ?? 0, p.output, p.output_above_200k)
-  )
+// Fill missing cache rates with the vendor default so the SQL never multiplies by NULL.
+export function priceRow(model: string, p: Price): PriceRow {
+  const anthropic = model.includes('claude')
+  return {
+    model,
+    ...p,
+    cache_read: p.cache_read ?? p.input * (anthropic ? 0.1 : 0.25),
+    cache_write: p.cache_write ?? p.input * (anthropic ? 1.25 : 1),
+  }
 }

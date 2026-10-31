@@ -1,4 +1,4 @@
--- Token volume and API-equivalent value per (agent, model, route) from classified (cost_provenance is agent-determined; see classified); estimated_value_usd is published-rate value, never billed spend.
+-- Token volume and API-equivalent value per (agent, model, route) from classified (cost_provenance says whether the log or the price table priced it; see classified); estimated_value_usd is published-rate value, never billed spend.
 SELECT
   agent,
   coalesce(model, '(unknown model)')   AS model,

@@ -2,11 +2,11 @@
 // `./llmlake status` — instant zero-AI terminal dashboard over the parquet lake: args/scope → views → runQuestions (duckdb) → renderers → main(). `scoped` carries --period/--agent/--cwd so question SQL never templates a WHERE; questions are self-describing .sql files in queries/ (adding one = drop in a file); views pick question ids + a render hint; renderers are pure rows → lines.
 import { join } from 'node:path'
 import { ensureDuckdb, runQuestions, type Row } from './lib/duck.ts'
+import { eventsSql } from './lib/lake.ts'
 import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { BOLD, DIM, paint, setColorEnabled } from './lib/ui.ts'
 
 const queriesDir = join(import.meta.dir, 'queries')
-const parquetGlob = join(import.meta.dir, 'data/parquet/**/*.parquet')
 const classifiedSql = await Bun.file(join(import.meta.dir, 'lib/classified.sql')).text()
 
 // ── args + scope ────────────────────────────────────────────────────────────
@@ -156,9 +156,9 @@ const VIEWS: Record<string, Panel[]> = {
 }
 
 // ── data: `scoped` carries the scope filter, questions read FROM it, queries run via lib/duck.ts ──
-function initSql(scope: Scope): string {
+async function initSql(scope: Scope): Promise<string> {
   return [
-    `CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('${parquetGlob}', hive_partitioning=true, union_by_name=true);`,
+    await eventsSql(),
     `CREATE OR REPLACE VIEW scoped AS SELECT * FROM events WHERE\n    ${scope.where};`,
     classifiedSql,
   ].join('\n')
@@ -379,7 +379,7 @@ async function main() {
   }
   let results: Record<string, Row[]>
   try {
-    results = await runQuestions(initSql(scope), queries)
+    results = await runQuestions(await initSql(scope), queries)
   } catch (cause) {
     console.error(cause instanceof Error ? cause.message : String(cause))
     process.exit(1)

@@ -16,13 +16,15 @@ import {
 } from './parse-session.ts'
 import { parseSessionRows } from './lib/build-session.ts'
 import { ensureDuckdb, runQuestions } from './lib/duck.ts'
+import { eventsSql, PARQUET_GLOB, PARQUET_ROOT, parquetPathFor, SESSIONS_ROOT } from './lib/lake.ts'
+import { writePrices } from './lib/prices.ts'
 import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { bold, dim, plural } from './lib/ui.ts'
 
 ensureDuckdb()
 
-const root = join(import.meta.dir, 'data/sessions')
-const parquetRoot = join(import.meta.dir, 'data/parquet')
+const root = SESSIONS_ROOT
+const parquetRoot = PARQUET_ROOT
 const codexSessionIndex = await buildCodexSessionIndex(root)
 const claudeCrossFile = newClaudeCrossFileRegistry()
 
@@ -34,22 +36,11 @@ async function fileMtime(path: string): Promise<number | null> {
   }
 }
 
-function outPathFor(agent: Agent, src: string): string {
-  const rel = relative(join(root, agent), src).replace(/\.jsonl$/, '.parquet')
-  return join(parquetRoot, `agent=${agent}`, rel)
-}
-
-// Hash the files that decide what rows a source produces; when their hash differs from the stamp left by the last successful build, ignore source mtimes and rebuild everything. A missing stamp (first build) is stale too.
+// Hash the files that decide what rows a source produces (prices aren't among them: they're joined at query time); when their hash differs from the stamp left by the last successful build, ignore source mtimes and rebuild everything. A missing stamp (first build) is stale too.
 const stampPath = join(parquetRoot, 'build.stamp')
 const codeHash = await (async () => {
   const hash = createHash('sha256')
-  for (const rel of [
-    'build.ts',
-    'parse-session.ts',
-    'pricing.ts',
-    'litellm-pricing.json',
-    'lib/build-session.ts',
-  ]) {
+  for (const rel of ['build.ts', 'parse-session.ts', 'lib/build-session.ts']) {
     hash.update(rel)
     hash.update(new Uint8Array(await Bun.file(join(import.meta.dir, rel)).arrayBuffer()))
   }
@@ -64,7 +55,7 @@ const codeStale =
 
 async function needsRebuild(src: string, agent: Agent): Promise<boolean> {
   if (codeStale) return true
-  const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(outPathFor(agent, src))])
+  const [srcM, outM] = await Promise.all([fileMtime(src), fileMtime(parquetPathFor(agent, src))])
   return !(srcM != null && outM != null && outM >= srcM)
 }
 
@@ -162,7 +153,7 @@ async function workerLoop(id: number) {
           skipped++
           continue
         }
-        const out = outPathFor(agent, src)
+        const out = parquetPathFor(agent, src)
         const rows = await parseFile(src, agent)
         await mkdir(dirname(out), { recursive: true })
         // Raw is authoritative: drop any stale output first so a failed COPY can't leave an old parquet behind and look successful. Only ENOENT is ignorable; e.g. an unwritable dir must fail the build so the marker isn't advanced over a stale output.
@@ -198,7 +189,7 @@ const expected = new Set<string>()
 for (const src of files) {
   const agent = relative(root, src).split(/[\\/]/)[0]
   if (agent && (AGENTS as readonly string[]).includes(agent))
-    expected.add(outPathFor(agent as Agent, src))
+    expected.add(parquetPathFor(agent as Agent, src))
 }
 let pruned = 0
 if (files.length) {
@@ -230,14 +221,15 @@ console.log(
     ].join(' · '),
   )}`,
 )
-if (errors) process.exit(1)
-
+// Prices live outside the parquet: refresh them on every build, even a partial one, so new models and changed rates show up without rebuilding sessions.
 if (files.length) {
-  const glob = join(parquetRoot, '**/*.parquet')
+  const { warning: priceWarning } = await writePrices(PARQUET_GLOB)
+  if (priceWarning) console.warn(priceWarning)
   const { unpriced } = await runQuestions(
-    `CREATE OR REPLACE VIEW scoped AS SELECT * FROM read_parquet('${glob}', hive_partitioning=true, union_by_name=true);`,
+    `${await eventsSql()}\nCREATE OR REPLACE VIEW scoped AS SELECT * FROM events;`,
     { unpriced: unpricedSql },
   )
   const warning = unpricedWarning(unpriced ?? [])
   if (warning) console.warn(warning)
 }
+if (errors) process.exit(1)

@@ -2,7 +2,6 @@
 import { existsSync } from 'node:fs'
 import { basename, join, relative } from 'node:path'
 import { Option, Schema, SchemaAST } from 'effect'
-import { computeClaudeCost, computeCodexCost } from './pricing.ts'
 
 // Single source of truth for the `Row` type and the DuckDB column map: each field carries a duckdb annotation so COLUMNS/colsSql derive from the schema.
 
@@ -57,7 +56,7 @@ export const RowSchema = Schema.Struct({
   output_tokens: INT,
   cache_read_tokens: INT,
   cache_write_tokens: INT,
-  cost_usd: DBL,
+  cost_usd: DBL, // only what the log itself reports (pi); lib/events.sql prices the rest at query time
   text: STR,
   tool_name: STR,
   tool_call_id: STR,
@@ -423,7 +422,6 @@ function finalizeClaudeUsage(rows: Row[], state: ParseState, ctx: ParseContext):
     carrier.cache_read_tokens = entry.cache_read_tokens
     carrier.cache_write_tokens = entry.cache_write_tokens
     carrier.model = entry.model ?? carrier.model
-    carrier.cost_usd = computeClaudeCost(carrier.model, carrier)
   }
 }
 
@@ -639,10 +637,6 @@ function parseClaude(line: string, lineNo: number, ctx: ParseContext): Row | Row
     row.tool_output = maybeJson(ev.toolUseResult)
     row.event_type = 'tool_result'
     if (row.is_error == null) row.is_error = false
-  }
-
-  if (row.input_tokens != null || row.output_tokens != null) {
-    row.cost_usd = computeClaudeCost(row.model, row)
   }
 
   // Calls-only turns become tool_call on the base row (keeping usage/cost); turns with text keep assistant_message/reasoning and emit every call as a deterministically suffixed split row.
@@ -941,9 +935,6 @@ function parseCodex(line: string, lineNo: number, ctx: ParseContext): Row | null
     }
   }
 
-  if (row.input_tokens != null || row.output_tokens != null) {
-    row.cost_usd = computeCodexCost(row.model, row)
-  }
   return row
 }
 

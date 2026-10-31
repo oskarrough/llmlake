@@ -1,4 +1,4 @@
--- Policy: claude/codex are subscription-backed login CLIs and pi's route is its provider, so cost_usd is always an API-equivalent estimate — never a billed amount.
+-- Policy: claude/codex are subscription-backed login CLIs and pi's route is its provider, so cost_usd (priced in lib/events.sql) is always an API-equivalent estimate — never a billed amount.
 CREATE OR REPLACE VIEW classified AS
 SELECT
   s.*,
@@ -13,8 +13,8 @@ SELECT
     ELSE 'unknown'
   END                                   AS billing_mode,
   CASE
-    WHEN s.agent IN ('claude', 'codex') THEN 'parser_estimate'
-    WHEN s.agent = 'pi' THEN 'source_rate_estimate'
+    WHEN s.source_cost_usd > 0 THEN 'source_rate_estimate' -- the log's own price (pi)
+    WHEN s.cost_usd IS NOT NULL THEN 'price_table_estimate' -- tokens × data/prices.json
     ELSE 'unavailable'
   END                                   AS cost_provenance,
   CASE

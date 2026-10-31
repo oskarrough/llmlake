@@ -10,5 +10,5 @@ export const unpricedSql = await Bun.file(
 export function unpricedWarning(rows: Row[]): string | null {
   if (rows.length === 0) return null
   const models = rows.map((r) => `${r.model} (${plural(Number(r.sessions), 'session')})`)
-  return `warning: no price for ${models.join(', ')}. Run ./sync-pricing.ts && ./llmlake build, or add them to PRICING in pricing.ts`
+  return `warning: no price for ${models.join(', ')}. Add them to PRICING in pricing.ts, then run llmlake build (no session rebuild needed)`
 }
