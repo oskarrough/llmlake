@@ -8,8 +8,9 @@ export const SESSIONS_ROOT = join(repo, 'data/sessions')
 export const PARQUET_ROOT = join(repo, 'data/parquet')
 export const PARQUET_GLOB = join(PARQUET_ROOT, '**/*.parquet')
 const PRICES_PATH = join(repo, 'data/prices.json')
-// Before the first build there's no price table; join an empty one so queries still run.
-const NO_PRICES_PATH = join(import.meta.dir, 'no-prices.json')
+const DUPLICATES_PATH = join(repo, 'data/duplicates.json')
+// Before the first build there's no price or duplicate table; join an empty one so queries still run.
+const EMPTY_PATH = join(import.meta.dir, 'empty.json')
 
 // data/sessions/<agent>/<rel>.jsonl → data/parquet/agent=<agent>/<rel>.parquet
 export function parquetPathFor(agent: string, src: string): string {
@@ -21,10 +22,11 @@ export function parquetPathFor(agent: string, src: string): string {
 const sqlStr = (s: string) => s.replaceAll("'", "''")
 
 export async function eventsSql(): Promise<string> {
-  const prices = (await Bun.file(PRICES_PATH).exists()) ? PRICES_PATH : NO_PRICES_PATH
+  const orEmpty = async (path: string) => ((await Bun.file(path).exists()) ? path : EMPTY_PATH)
   return (await Bun.file(join(import.meta.dir, 'events.sql')).text())
     .replaceAll('{parquet}', sqlStr(PARQUET_GLOB))
-    .replaceAll('{prices}', sqlStr(prices))
+    .replaceAll('{prices}', sqlStr(await orEmpty(PRICES_PATH)))
+    .replaceAll('{duplicates}', sqlStr(await orEmpty(DUPLICATES_PATH)))
 }
 
 async function mtime(path: string): Promise<number | null> {

@@ -24,6 +24,7 @@ import {
   SESSIONS_ROOT,
   unbuiltSessions,
 } from './lib/lake.ts'
+import { writeDuplicates } from './lib/duplicates.ts'
 import { writePrices } from './lib/prices.ts'
 import { unpricedSql, unpricedWarning } from './lib/unpriced.ts'
 import { bold, dim, plural } from './lib/ui.ts'
@@ -242,10 +243,22 @@ console.log(
     ].join(' · '),
   )}`,
 )
-// Prices live outside the parquet: refresh them on every build, even a partial one, so new models and changed rates show up without rebuilding sessions.
+// Prices and duplicates live outside the parquet: refresh them on every build, even a partial one, so new models, changed rates and newly synced copies apply without rebuilding sessions.
 if (files.length) {
-  const { warning: priceWarning } = await writePrices(PARQUET_GLOB)
+  const [{ warning: priceWarning }, dups] = await Promise.all([
+    writePrices(PARQUET_GLOB),
+    writeDuplicates(PARQUET_GLOB),
+  ])
   if (priceWarning) console.warn(priceWarning)
+  const dupTotal = Object.values(dups).reduce((a, b) => a + b, 0)
+  if (dupTotal)
+    console.log(
+      dim(
+        `  ${plural(dupTotal, 'call')} recorded twice, counted once (${Object.entries(dups)
+          .map(([reason, n]) => `${n} ${reason}`)
+          .join(' · ')})`,
+      ),
+    )
   const { unpriced } = await runQuestions(
     `${await eventsSql()}\nCREATE OR REPLACE VIEW scoped AS SELECT * FROM events;`,
     { unpriced: unpricedSql },

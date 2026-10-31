@@ -57,6 +57,15 @@ The overview reports the four token buckets the parsers emit — **input**, **ou
 (tokens sent to populate that cache). There is no generic token total. Cache hit is
 `cache_read / (input + cache_read)`: the share of the prompt that never had to be re-sent.
 
+Costs are API-equivalent estimates, never a bill. A call the session log priced itself (pi)
+keeps that price; every other call is its tokens × its model's published rate. `build` fetches
+[LiteLLM's price list](https://github.com/BerriAI/litellm) each run and writes the rate it
+matched for each model to `data/prices.json` (the `matched` column says which listing). Models
+only match exactly, so an unknown or aliased model stays unpriced and `build` names it rather
+than guessing. A call logged twice — a resumed or forked session, an archived Codex file, or a
+pi/opencode call that also lands in Claude Code's logs through the Agent SDK — counts once:
+`build` lists the copies in `data/duplicates.json`, and their rows keep `duplicate_of` but no tokens.
+
 Under the hood it's just SQL: each panel is a question file in `queries/`,
 and a `view` lists which questions to show. So a new metric is a new `.sql`
 file, and the layout lives in `status.ts`.
@@ -81,8 +90,8 @@ After `collect` and `build`, open any coding agent with skills support in this r
 
 ## File overview for contributors
 
-- `collect-{claude,codex,hermes, pi}` — copy sessions
-- `build` — parse every collected JSONL file into parquet
+- `collect-{claude,codex,cursor,hermes,opencode,pi}` — copy sessions
+- `build` — parse every collected JSONL file into parquet, then refresh prices and duplicates
 - `build-one` — parse a single raw JSONL file into parquet
 - `query` — duckdb shell over `data/parquet/` with `events` + `scoped` views
 - `status` — terminal dashboard; composes question files in `queries/` into views

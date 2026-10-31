@@ -1,4 +1,5 @@
--- The `events` view: parquet rows priced at query time. {parquet} and {prices} are filled in by lib/lake.ts and ./query.
+-- The `events` view: parquet rows with duplicates and prices applied at query time. {parquet}, {prices} and {duplicates} are filled in by lib/lake.ts.
+-- A call recorded more than once (data/duplicates.json, see lib/duplicates.sql) counts once: the extra copies keep their rows but lose tokens and cost, and point at the row that counts in duplicate_of. A bridged call's kept row takes the exact model Claude Code logged.
 -- cost_usd = the cost the log itself reported when positive (pi), else tokens × the model's row in data/prices.json (written by every build), else NULL (unpriced). source_cost_usd keeps the logged value.
 -- Token conventions: codex input includes cached input (fresh = input - cache_read); every other agent reports four disjoint buckets.
 
@@ -17,7 +18,27 @@ SELECT * FROM read_json('{prices}', format='array', columns={
   cache_read_above_200k: 'DOUBLE', cache_write_above_200k: 'DOUBLE'
 });
 
+CREATE OR REPLACE VIEW duplicates AS
+SELECT * FROM read_json('{duplicates}', format='array', columns={
+  dup: 'VARCHAR', kept: 'VARCHAR', reason: 'VARCHAR', model: 'VARCHAR'
+});
+
 CREATE OR REPLACE VIEW events AS
+WITH lake AS (
+  SELECT
+    e.* REPLACE (
+      coalesce(k.model, e.model) AS model,
+      CASE WHEN d.dup IS NULL THEN e.input_tokens END AS input_tokens,
+      CASE WHEN d.dup IS NULL THEN e.output_tokens END AS output_tokens,
+      CASE WHEN d.dup IS NULL THEN e.cache_read_tokens END AS cache_read_tokens,
+      CASE WHEN d.dup IS NULL THEN e.cache_write_tokens END AS cache_write_tokens,
+      CASE WHEN d.dup IS NULL THEN e.cost_usd END AS cost_usd
+    ),
+    d.kept AS duplicate_of
+  FROM read_parquet('{parquet}', hive_partitioning=true, union_by_name=true) e
+  LEFT JOIN duplicates d ON d.dup = e.row_id
+  LEFT JOIN duplicates k ON k.kept = e.row_id AND k.reason = 'bridge'
+)
 SELECT
   e.* REPLACE (
     CASE
@@ -38,5 +59,5 @@ SELECT
     END AS cost_usd
   ),
   e.cost_usd AS source_cost_usd
-FROM read_parquet('{parquet}', hive_partitioning=true, union_by_name=true) e
+FROM lake e
 LEFT JOIN prices p ON p.model = e.model;
