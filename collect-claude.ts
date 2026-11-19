@@ -33,6 +33,11 @@ export function collectClaude(): Promise<CollectResult> {
           label: '~/.config/claude',
         },
       ]
+  const extraProjects = process.env.LLMLAKE_CLAUDE_PROJECTS?.trim()
+  if (extraProjects) {
+    const src = join(projectsDir(expandHome(extraProjects)), '/')
+    sources.push({ src, dst: join(dstRoot, '_extra', '/'), label: shortPath(src) })
+  }
   return collect('claude', dstRoot, sources)
 }
 

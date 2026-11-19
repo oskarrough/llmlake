@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Pi saves session logs under ~/.pi/agent/sessions/ (organized by cwd). bb's Pi bridge writes the same format flat into ~/.bb/pi-bridge-sessions/.
+// Pi and BB write the same JSONL format. Keep both BB paths for older installs and logs.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { collect, formatResult, sessionsDir, type CollectResult } from './lib/collect.ts'
@@ -10,6 +10,11 @@ export function collectPi(): Promise<CollectResult> {
     { src: join(homedir(), '.pi/agent/sessions/'), label: '~/.pi' },
     {
       src: join(homedir(), '.bb/pi-bridge-sessions/'),
+      dst: join(dstRoot, '_bb', '/'),
+      label: '~/.bb',
+    },
+    {
+      src: join(homedir(), '.bb/plugins/provider-pi/bridge-data/sessions/'),
       dst: join(dstRoot, '_bb', '/'),
       label: '~/.bb',
     },
