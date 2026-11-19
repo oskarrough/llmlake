@@ -46,7 +46,7 @@ async function move(label: string, from: string, to: string) {
 
   const manifest = new Blob(files.map((file) => file + '\0'))
   const { exitCode, stderr } =
-    await $`rsync -a --from0 --files-from=- ${from}/ ${to}/ < ${manifest}`.nothrow().quiet()
+    await $`rsync -aO --from0 --files-from=- ${from}/ ${to}/ < ${manifest}`.nothrow().quiet()
   if (exitCode !== 0 && !PARTIAL.has(exitCode)) {
     throw new Error(stderr.toString().trim() || `rsync exited with ${exitCode}`)
   }
